@@ -215,7 +215,11 @@ object Extract extends LazyLogging {
     // println("allbodiesflatten: ", allBodiesFlattened)
     if (squishOutConnects) {
       val extIOMap = findExternalPorts(circuit)
-      val namesToExclude = extIOMap.keySet
+      val preserved = if (essent.passes.NanhuSimulation.enabled) {
+        val source = scala.io.Source.fromFile(sys.props.getOrElse("rteaal.preserved", "preserved_signals.txt"))
+        try source.getLines().map(_.trim).filter(_.nonEmpty).toSet finally source.close()
+      } else Set.empty[String]
+      val namesToExclude = extIOMap.keySet ++ preserved
       squishOutPassThroughConnects(allBodiesFlattened, namesToExclude)
     } else allBodiesFlattened
   }

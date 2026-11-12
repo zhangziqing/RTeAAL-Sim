@@ -230,6 +230,8 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, outputDir: String, topName:
   //----------------------------------------------------------------------------
   def execute(circuit: Circuit): Unit = {
     val opt = initialOpt
+    if (essent.passes.NanhuSimulation.enabled)
+      essent.passes.NanhuSimulation.writePreserved(circuit)
     val topName = circuit.main
     val headerGuardName = topName.toUpperCase + "_H_"
     w.writeLines(0, s"#ifndef $headerGuardName")
@@ -261,7 +263,7 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, outputDir: String, topName:
     if (opt.useCondParts) {
       condPartWorker.doOpt(opt.partCutoff)
     } else {
-      if (opt.regUpdates)
+      if (opt.regUpdates && !sys.props.get("rteaal.skipRegElision").contains("true"))
         OptElideRegUpdates(sg)
       if (opt.conditionalMuxes)
         MakeCondMux(sg, rn, Set())
@@ -273,7 +275,9 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, outputDir: String, topName:
     // [RTeAALSim] Add Intermediate Variable structure
     val designfileName = initialOpt.firInputFile.toPath.getFileName.toString
     var designName = ""
-    if (designfileName == "freechips.rocketchip.system.DefaultConfig.fir") {
+    if (sys.props.contains("rteaal.design")) {
+      designName = sys.props("rteaal.design")
+    } else if (designfileName == "freechips.rocketchip.system.DefaultConfig.fir") {
       println("[INFO] Rocketchip Default Design.")
       designName = "rocketchip-1c"
     } else if (designfileName == "freechips.rocketchip.system.DualCoreConfig.fir") {
@@ -417,6 +421,11 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, outputDir: String, topName:
 
 
     // =========================== TeAAL DFGraph Extraction =========================
+    if (sys.props.contains("rteaal.design")) {
+      import scala.sys.process._
+      require(Seq("python3", "header_parser.py", designName, "--top", topName).! == 0,
+        "Memory metadata extraction failed")
+    }
     val ju = new TeAALUtil()
     val startTime = System.nanoTime()
     ju.memoryIdxRead(s"accum_length_dict_${designName}.json")
@@ -428,6 +437,22 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, outputDir: String, topName:
     sg.stmtsOrdered() foreach ( stmt =>
         te.extractStmt(stmt)
     )
+    if (essent.passes.NanhuSimulation.enabled) {
+      val source = scala.io.Source.fromFile(sys.props("rteaal.preserved"))
+      val preserved = try source.getLines().map(_.trim).filter(_.nonEmpty).toVector finally source.close()
+      // Width-only casts may become extractor aliases without a producer node.
+      // Materialize observed pins before discarding that alias map.
+      preserved.foreach { pin =>
+        if (!te.outEdgeBuffer.contains(pin) && te.inOutMap.contains(pin)) {
+          val alias = te.inOutMap(pin)
+          val inType = UIntType(IntWidth(te.bitWidthMetadata(alias)))
+          val outType = UIntType(IntWidth(te.bitWidthMetadata(pin)))
+          te.varUpdate(te.inEdgeBuffer, te.outEdgeBuffer, alias, pin, inType, outType)
+        }
+      }
+      val missing = preserved.filterNot(te.outEdgeBuffer.contains)
+      require(missing.isEmpty, s"Missing observable producers: ${missing.mkString(", ")}")
+    }
     val mem_extra_inputs = te.mem_reg_update()
     te.largeOpBreakDown.clear()
     te.inOutMap.clear()
@@ -441,6 +466,12 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, outputDir: String, topName:
     val dfGraph = new TeAALDFGraphExtractor(te.opInBufferOrder, te.inEdgeBuffer, te.outEdgeBuffer, te.oEBufferR, 
                   te.bitWidthMetadata, te.regOrder, te.regNextOrder, tconstp.muxJumpTable, te.dshiftGroup, mem_extra_inputs, tconstp.randomChain_Inputs)
     dfGraph.DFGraphGen()
+    if (essent.passes.NanhuSimulation.enabled) {
+      val source = scala.io.Source.fromFile(sys.props("rteaal.preserved"))
+      val missing = try source.getLines().map(_.trim).filter(_.nonEmpty)
+        .filterNot(dfGraph.dtmSignalCollect.contains).toVector finally source.close()
+      require(missing.isEmpty, s"Observable pins lost during tensor optimization: ${missing.mkString(", ")}")
+    }
 
     // Report printing
     val treport = new TeAALReport(tconstp.op_counter, tconstp.uniqueOps, dfGraph.LAYER_NUM, dfGraph.maxL, dfGraph.TOTAL_IOP, 
@@ -463,7 +494,9 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, outputDir: String, topName:
     teAALTranspiler.tensorTocircInYML(dfGraph.circuitInput, "../../kernel/txt", s"layerIn_${designName}")
     teAALTranspiler.tensorToInYML(dfGraph.nodeIDOrderMap, dfGraph.LAYER_NUM, dfGraph.maxL, te.ORank, "I", "S", "O", "../../kernel/yaml", s"operationInputMask_${designName}_maskedIn_full_func")
     teAALTranspiler.tensorToOpYML(dfGraph.isnMap, dfGraph.LAYER_NUM, dfGraph.maxL, "I", "S", "../../kernel/yaml", s"operationMask_${designName}_maskedIn_full_func")
-    teAALTranspiler.kernels_gen(dfGraph.isnMap, dfGraph.nodeIDOrderMap, dfGraph.circuitInput, "../../kernel", s"${designName}")
+    if (!sys.props.contains("rteaal.genericOnly")) {
+      teAALTranspiler.kernels_gen(dfGraph.isnMap, dfGraph.nodeIDOrderMap, dfGraph.circuitInput, "../../kernel", s"${designName}")
+    }
     
     val endTime = System.nanoTime()
     val duration = (endTime - startTime) / 1000000000
@@ -516,12 +549,37 @@ class EssentCompiler(opt: OptFlags) {
       else { HarnessGenerator.topFile(topName, harnessWriter, "")}
       harnessWriter.close()
     }
+    val resumeLow = sys.props.get("rteaal.preClockInput").contains("true")
+    require(!resumeLow || essent.passes.NanhuSimulation.enabled,
+      "preClockInput is restricted to the Nanhu pre-clock checkpoint")
+    val input = if (resumeLow) {
+      // Serialized checkpoints lose working-IR kinds, types and flows. Restore
+      // those before claiming the previously completed compiler transforms.
+      Seq(firrtl.passes.ResolveKinds, firrtl.passes.InferTypes, firrtl.passes.ResolveFlows)
+        .foldLeft(CircuitState(circuit, Seq())) { case (state, pass) => pass.execute(state) }
+    } else CircuitState(circuit, Seq())
     val firrtlCompiler = new transforms.Compiler(readyForEssent)
-    val resultState = firrtlCompiler.execute(CircuitState(circuit, Seq()))
+    val resultState = if (resumeLow) {
+      // Replay the exact suffix of the fresh compiler schedule. Supplying a
+      // partial currentState lets invalidation scheduling move standard FIRRTL
+      // passes after ESSENT's custom memory/register nodes, which they cannot
+      // traverse. The checkpoint was serialized immediately before this pass.
+      val suffix = firrtlCompiler.flattenedTransformOrder
+        .dropWhile(_ != essent.passes.NoClockConnects)
+      require(suffix.nonEmpty, "NoClockConnects missing from fresh compiler schedule")
+      suffix.foldLeft(input) { case (state, transform) =>
+        val wrapped = firrtlCompiler.wrappers.foldLeft(transform) {
+          case (inner, wrapper) => wrapper(inner)
+        }
+        wrapped.transform(state)
+      }
+    } else firrtlCompiler.execute(input)
+    val preparedCircuit = if (essent.passes.NanhuSimulation.enabled)
+      essent.passes.NanhuSimpleExpressions.run(resultState.circuit) else resultState.circuit
     if (opt.dumpLoFirrtl) {
       val debugFilename = new File(opt.outputDir(), s"$topName.lo.fir")
       val debugWriter = new FileWriter(debugFilename)
-      debugWriter.write(resultState.circuit.serialize)
+      debugWriter.write(preparedCircuit.serialize)
       debugWriter.close()
     }
 
@@ -529,8 +587,8 @@ class EssentCompiler(opt: OptFlags) {
     val dutFile = new File(outputDir, s"$topName.h")
     val dutWriter = new FileWriter(dutFile)
 
-    val emitter = new EssentEmitter(opt, dutWriter, outputDir, topName, resultState.circuit)
-    emitter.execute(resultState.circuit)
+    val emitter = new EssentEmitter(opt, dutWriter, outputDir, topName, preparedCircuit)
+    emitter.execute(preparedCircuit)
     dutWriter.close()
   }
 }

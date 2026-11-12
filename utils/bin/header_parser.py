@@ -75,13 +75,14 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Essent Header Parser")
     parser.add_argument("name", help="Design's name")
+    parser.add_argument("--top", default="TestHarness", help="Top module name")
     args = parser.parse_args()
-    HEADER_FILE = "TestHarness.h" 
+    HEADER_FILE = args.top + ".h"
     with open(HEADER_FILE, "r") as f:
         content = f.read()
     structs = extract_structs(content)
 
-    top_struct = "TestHarness"
+    top_struct = args.top
     if top_struct not in structs:
         print(f"Error: Struct '{top_struct}' not found.")
         exit(1)
@@ -138,7 +139,9 @@ if __name__ == "__main__":
         if not line:
             continue
 
-        match = re.match(r"UInt<(\d+)> (.+)", line)
+        # Tensor storage is raw bits for both signed and unsigned memories;
+        # signed interpretation remains in the FIRRTL operation metadata.
+        match = re.match(r"[US]Int<(\d+)> (.+)", line)
         if not match:
             continue
 
@@ -235,3 +238,5 @@ if __name__ == "__main__":
     print(f"✅ Wrote accumulated lengths to: {output_file}")
     print(f"u8 memory array length: {length1}")
     print(f"u64 memory array length: {length2}")
+    with open(f"memory_sizes_{args.name}.json", "w") as f:
+        json.dump({"size8": length1, "size64": length2}, f, indent=2)

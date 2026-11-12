@@ -34,7 +34,7 @@ class TeAALDFGraphConstProp(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
 
     val SimDTM_output: HashSet[String] =
       HashSet.from(
-        Source.fromFile("preserved_signals.txt")
+        Source.fromFile(sys.props.getOrElse("rteaal.preserved", "preserved_signals.txt"))
           .getLines()
           .map(_.trim)
           .filter(_.nonEmpty)
@@ -292,6 +292,11 @@ class TeAALDFGraphConstProp(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
       val opTpe = opNameParse(operation)
       val output = if (opTpe == "stop" || opTpe == "memw" || opTpe == "memr") "" else oEBufferR(operation)
       var updateIn = false
+
+      // These assignments are observable harness/event pins, including constants.
+      // Removing the producer leaves a dangling tensor input instead of a value.
+      if (essent.passes.NanhuSimulation.enabled && SimDTM_output.contains(output))
+        return false
 
       opTpe match {
         case "stop" | "memw" | "memr" => {}
@@ -742,7 +747,7 @@ class TeAALDFGraphConstProp(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
     }
 
     def chainClassification(chain_list: HashMap[String, HashSet[String]]): HashMap[Int, HashMap[String, HashSet[String]]] = {
-      val ret = HashMap[Int, HashMap[String, HashSet[String]]]()
+      val ret = HashMap(0 -> HashMap[String, HashSet[String]](), 1 -> HashMap[String, HashSet[String]]())
       chain_list.foreach { case (root, chain) =>
         val isCaseStmt = caseStmtRetrieve(root, chain)
         val inner = ret.getOrElseUpdate(isCaseStmt, HashMap[String, HashSet[String]]())
@@ -923,7 +928,7 @@ class TeAALDFGraphConstProp(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
     }
 
     def classAdjust(classed_chains: HashMap[Int, HashMap[String, HashSet[String]]]): HashMap[Int, HashMap[String, HashSet[String]]] = {
-      val ret = HashMap[Int, HashMap[String, HashSet[String]]]()
+      val ret = HashMap(0 -> HashMap[String, HashSet[String]](), 1 -> HashMap[String, HashSet[String]]())
       val case0 = classed_chains.getOrElse(0, HashMap.empty)
       val case1 = classed_chains.getOrElse(1, HashMap.empty)
 
@@ -1022,10 +1027,26 @@ class TeAALDFGraphConstProp(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
         if (chain.nonEmpty) {
           val eg_op = chain.head
           val cond = new_muxRecord(eg_op)("condName")
-          val bitwidth = ju.IntBWExtract(new_muxCondRecord(eg_op)(cond)("Number").head)
-          if ((math.pow(2, bitwidth).toInt) / chain.size < 4) {
+          val variables = chain.flatMap { op =>
+            new_muxCondRecord(op)(new_muxRecord(op)("condName"))("Var")
+          }.toSet
+          val bitwidth = if (essent.passes.NanhuSimulation.enabled && variables.size == 1)
+            bitWidthMetadata(variables.head)
+          else ju.IntBWExtract(new_muxCondRecord(eg_op)(cond)("Number").head)
+          val tableSize = BigInt(1) << bitwidth
+          // Literal widths can differ (e.g. 0, 1, 4). The lookup is indexed by
+          // the selector, so its complete domain must fit the table. Otherwise
+          // leave the original muxes intact.
+          val makeTable = if (essent.passes.NanhuSimulation.enabled)
+            variables.size == 1 && tableSize.isValidInt && tableSize / chain.size < 4 &&
+              chain.forall { op =>
+                val value = ju.hexInt(new_muxCondRecord(op)(new_muxRecord(op)("condName"))("Number").head)
+                value >= 0 && value < tableSize
+              }
+          else (math.pow(2, bitwidth).toInt) / chain.size < 4
+          if (makeTable) {
             val default_val = new_muxRecord(eg_op)("fvalName")
-            var jump_array = ArrayBuffer.fill(math.pow(2, bitwidth).toInt)(default_val)
+            var jump_array = ArrayBuffer.fill(tableSize.toInt)(default_val)
             chain foreach {op=>{
               val tval = new_muxRecord(op)("tvalName")  
               val cond = new_muxRecord(op)("condName")

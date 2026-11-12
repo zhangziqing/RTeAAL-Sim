@@ -482,7 +482,7 @@ class TeAALDFGraphExtractor(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
     val SimDTM_input = ArrayBuffer("SimDTM$$inst.debug_resp_ready", "SimDTM$$inst.debug_req_valid", "SimDTM$$inst.debug_req_bits_addr", "SimDTM$$inst.debug_req_bits_op", "SimDTM$$inst.debug_req_bits_data", "SimDTM$$inst.exit")
     val SimDTM_output: ArrayBuffer[String] =
       ArrayBuffer.from(
-        Source.fromFile("preserved_signals.txt")
+        Source.fromFile(sys.props.getOrElse("rteaal.preserved", "preserved_signals.txt"))
           .getLines()
           .map(_.trim)
           .filter(_.nonEmpty)

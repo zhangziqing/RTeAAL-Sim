@@ -38,3 +38,16 @@ utils/bin/input_bw.txt
 utils/bin/input_m.txt
 utils/bin/split_signal_mapping_memory.json
 utils/bin/split_signals_memory.json
+
+# Local compiler and simulator artifacts
+__pycache__/
+*.py[cod]
+*.class
+*.jar
+*.vcd
+*.fst
+kernel/kernel_IU_*.cc
+utils/bin/*.h
+utils/bin/accum_length_dict_*.json
+utils/bin/mem_array_len_*.json
+utils/bin/memory_sizes_*.json

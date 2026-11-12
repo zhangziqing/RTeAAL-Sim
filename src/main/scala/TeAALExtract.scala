@@ -610,6 +610,31 @@ class TeAALExtractor(memory_array : LinkedHashMap[String, Int]) {
   }
 
   def wideBits(opN: String, left_opSet: HashMap[Int, String], endIdx_const: Int, startIdx_const: Int, small_outs: HashMap[Int, String], bw_op: Int): Unit = {
+    if (essent.passes.NanhuSimulation.enabled) {
+      // Slice each result word independently. This also handles aligned slices
+      // spanning three or more words without emitting a shift by zero/64.
+      for (i <- 0 until small_outs.size) {
+        val start = startIdx_const + 64 * i
+        val block = start / 64
+        val shift = start % 64
+        val width = math.min(64, endIdx_const - start + 1)
+        val low = if (shift == 0) left_opSet(block) else {
+          bitWidthMetadata(shift.toString) = 64
+          genTwoInOp("shr", left_opSet(block), shift.toString, 64)
+        }
+        val joined = if (shift != 0 && shift + width > 64) {
+          bitWidthMetadata((64 - shift).toString) = 64
+          genThreeInOp("cat", left_opSet(block + 1), low, (64 - shift).toString, 64)
+        } else low
+        if (width == 64) genOneInOpOut("assign", joined, small_outs(i), width)
+        else {
+          val mask = ((BigInt(1) << width) - 1).toString
+          bitWidthMetadata(mask) = 64
+          genTwoInOpOut("and", joined, mask, small_outs(i), width)
+        }
+      }
+      return
+    }
     val startIdx_block = startIdx_const / 64
     val endIdx_block = endIdx_const / 64
     val cross_block = endIdx_block - startIdx_block + 1
@@ -1709,6 +1734,8 @@ class TeAALExtractor(memory_array : LinkedHashMap[String, Int]) {
           nName
         }
         case _ => {
+          if (essent.passes.NanhuSimulation.enabled)
+            throw new IllegalArgumentException(s"Unsupported Nanhu operation: ${p.op}")
           println("missing operation: ", p.op)
           "other\n"
         }
@@ -1815,6 +1842,8 @@ class TeAALExtractor(memory_array : LinkedHashMap[String, Int]) {
             bitsExtract(p, d.name)
           }
           case _ => {
+            if (essent.passes.NanhuSimulation.enabled)
+              throw new IllegalArgumentException(s"Unsupported Nanhu operation: ${p.op}")
             println("missing operation: ", p.op)
           }
         }
@@ -1913,6 +1942,8 @@ class TeAALExtractor(memory_array : LinkedHashMap[String, Int]) {
             bitsExtract(p, c.loc.serialize)
           }
           case _ => {
+            if (essent.passes.NanhuSimulation.enabled)
+              throw new IllegalArgumentException(s"Unsupported Nanhu operation: ${p.op}")
             println("missing operation: ", p.op)
           }
         }
@@ -2018,6 +2049,8 @@ class TeAALExtractor(memory_array : LinkedHashMap[String, Int]) {
             bitsExtract(p, regUp_name)
           }
           case _ => {
+            if (essent.passes.NanhuSimulation.enabled)
+              throw new IllegalArgumentException(s"Unsupported Nanhu operation: ${p.op}")
             println("missing operation: ", p.op)
           }
         }
@@ -2084,21 +2117,34 @@ class TeAALExtractor(memory_array : LinkedHashMap[String, Int]) {
 
   def mem_reg_update(): HashMap[String, HashSet[Int]] = {
     var extra_mem_inputs = HashMap[String, HashSet[Int]]()
+    // The upstream intersection scans huge fanout sets for constants such as
+    // zero for every write port. Index reads by the same two fields instead.
+    val readsByMemory = HashMap.empty[(String, String), HashSet[String]]
+    if (essent.passes.NanhuSimulation.enabled) opInBufferOrder.foreach { case (op, inputs) =>
+      if (op.startsWith("memr")) {
+        val key = ju.inputSearch(inputs, 0) -> ju.inputSearch(inputs, 1)
+        readsByMemory.getOrElseUpdate(key, HashSet.empty) += oEBufferR(op)
+      }
+    }
     opInBufferOrder foreach {case(op, inputs)=>{
       if (op.startsWith("memw")) {
         val memory_block_idx = ju.inputSearch(inputs, 2)
         val arr_base_idx = ju.inputSearch(inputs, 3)
-        val all_in_ops = inEdgeBuffer(memory_block_idx) & inEdgeBuffer(arr_base_idx)
-        val mem_r = all_in_ops.filter(_.startsWith("memr"))
-        val input_mem_r = HashSet[String]()
-        mem_r foreach {memr=>{
-          val mem_r_input = opInBufferOrder(memr)
-          val mem_r_block_idx = ju.inputSearch(mem_r_input, 0)
-          val mem_r_base_idx = ju.inputSearch(mem_r_input, 1)
-          if ((mem_r_block_idx == memory_block_idx) && (mem_r_base_idx == arr_base_idx)) {
-            input_mem_r += oEBufferR(memr)
+        val input_mem_r = if (essent.passes.NanhuSimulation.enabled)
+          readsByMemory.getOrElse(memory_block_idx -> arr_base_idx, HashSet.empty[String])
+        else {
+          val all_in_ops = inEdgeBuffer(memory_block_idx) & inEdgeBuffer(arr_base_idx)
+          val mem_r = all_in_ops.filter(_.startsWith("memr"))
+          val result = HashSet[String]()
+          mem_r foreach { memr =>
+            val mem_r_input = opInBufferOrder(memr)
+            val mem_r_block_idx = ju.inputSearch(mem_r_input, 0)
+            val mem_r_base_idx = ju.inputSearch(mem_r_input, 1)
+            if ((mem_r_block_idx == memory_block_idx) && (mem_r_base_idx == arr_base_idx))
+              result += oEBufferR(memr)
           }
-        }}
+          result
+        }
 
         var idx = 7
         var idx_arr = HashSet[Int]()

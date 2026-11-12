@@ -23,7 +23,7 @@ libraryDependencies += "org.msgpack" % "msgpack-core" % "0.8.22"
 // libraryDependencies += "org.msgpack" %% "msgpack-scala" % "0.6.8"
 
 
-// libraryDependencies += "org.yaml" % "snakeyaml" % "1.29" 
+libraryDependencies += "org.yaml" % "snakeyaml" % "2.0"
 
 val lihaoyiVersion = "0.9.1"
 
