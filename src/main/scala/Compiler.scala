@@ -574,8 +574,10 @@ class EssentCompiler(opt: OptFlags) {
         wrapped.transform(state)
       }
     } else firrtlCompiler.execute(input)
-    val preparedCircuit = if (essent.passes.NanhuSimulation.enabled)
+    val simpleCircuit = if (essent.passes.NanhuSimulation.enabled)
       essent.passes.NanhuSimpleExpressions.run(resultState.circuit) else resultState.circuit
+    val preparedCircuit = if (opt.balanceAssociativeOps) essent.passes.BalanceAssociativeOps
+      .execute(resultState.copy(circuit = simpleCircuit)).circuit else simpleCircuit
     if (opt.dumpLoFirrtl) {
       val debugFilename = new File(opt.outputDir(), s"$topName.lo.fir")
       val debugWriter = new FileWriter(debugFilename)

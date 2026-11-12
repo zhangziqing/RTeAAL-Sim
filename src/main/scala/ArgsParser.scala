@@ -22,7 +22,8 @@ case class OptFlags(
     withVCD: Boolean = false,
     withFST: Boolean = false,
     essentLogLevel: String = "warn",
-    firrtlLogLevel: String = "warn") {
+    firrtlLogLevel: String = "warn",
+    balanceAssociativeOps: Boolean = true) {
   def inputFileDir() = firInputFile.getParent
   def outputDir() = if (inputFileDir() == null) "" else inputFileDir()
 }
@@ -37,6 +38,7 @@ class ArgsParser {
     ).text("Generate code to debug with ESSENT")
 
     opt[Unit]("O0").abbr("O0").action( (_, c) => c.copy(
+        balanceAssociativeOps = false,
         removeFlatConnects = false,
         regUpdates = false,
         conditionalMuxes = false,
@@ -44,6 +46,7 @@ class ArgsParser {
     ).text("disable all optimizations")
 
     opt[Unit]("O1").abbr("O1").action( (_, c) => c.copy(
+        balanceAssociativeOps = true,
         removeFlatConnects = true,
         regUpdates = true,
         conditionalMuxes = false,
@@ -51,6 +54,7 @@ class ArgsParser {
     ).text("enable only optimizations without conditionals")
 
     opt[Unit]("O2").abbr("O2").action( (_, c) => c.copy(
+        balanceAssociativeOps = true,
         removeFlatConnects = true,
         regUpdates = true,
         conditionalMuxes = true,
@@ -58,6 +62,7 @@ class ArgsParser {
     ).text("enable conditional evaluation of mux inputs")
 
     opt[Unit]("O3").abbr("O3").action( (_, c) => c.copy(
+        balanceAssociativeOps = true,
         removeFlatConnects = true,
         regUpdates = true,
         conditionalMuxes = true,
@@ -65,11 +70,16 @@ class ArgsParser {
     ).text("enable all optimizations (default)")
 
     opt[Unit]("O4").abbr("O4").action( (_, c) => c.copy(
+        balanceAssociativeOps = true,
         removeFlatConnects = true,
         regUpdates = true,
         conditionalMuxes = false,
         useCondParts=true)
     ).text("no mux chain for my self")
+
+    opt[Unit]("no-associative-balance").action((_, c) =>
+      c.copy(balanceAssociativeOps = false)
+    ).text("disable associative tree balancing")
 
     opt[Unit]("dump").action( (_, c) => c.copy(
         dumpLoFirrtl = true)

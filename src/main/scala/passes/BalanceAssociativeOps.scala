@@ -55,8 +55,28 @@ object BalanceAssociativeOps extends Pass {
     val statements = flatten(m.body)
     // The pass runs on Low FIRRTL; do not move definitions across conditional scopes.
     if (statements.exists(_.isInstanceOf[Conditionally])) return m
-    val definitions = statements.collect { case n: DefNode => n.name -> n }.toMap
-    val candidates = statements.collect { case n @ DefNode(_, _, p: DoPrim) if eligible(p) => n }
+    val namespace = Namespace(m)
+    // LowFormOptimized can inline the last operation into a connect or another
+    // sink. Name such roots only when their tree is actually rewritten.
+    val statementRoots = new java.util.IdentityHashMap[Statement, Seq[(Expression, DefNode)]]
+    val sinkNodes = mutable.ArrayBuffer.empty[DefNode]
+    statements.filterNot(_.isInstanceOf[DefNode]).foreach { s =>
+      val roots = mutable.ArrayBuffer.empty[(Expression, DefNode)]
+      s.mapExpr { e =>
+        e match {
+          case p: DoPrim if eligible(p) =>
+            val n = DefNode(NoInfo, namespace.newName("__rteaal_balance_root"), p)
+            roots += e -> n
+            sinkNodes += n
+          case _ =>
+        }
+        e
+      }
+      if (roots.nonEmpty) statementRoots.put(s, roots.toVector)
+    }
+    val allNodes = statements.collect { case n: DefNode => n } ++ sinkNodes
+    val definitions = allNodes.map(n => n.name -> n).toMap
+    val candidates = allNodes.collect { case n @ DefNode(_, _, p: DoPrim) if eligible(p) => n }
     if (candidates.isEmpty) return m
     val uses = mutable.HashMap.empty[String, Int].withDefaultValue(0)
     def count(e: Expression): Expression = {
@@ -66,6 +86,52 @@ object BalanceAssociativeOps extends Pass {
     }
     // mapExpr also works for ESSENT's MemWrite/RegUpdate, whose foreachExpr is undefined.
     statements.foreach(_.mapExpr(count))
+
+    // Estimate arrival depth through local combinational definitions. Extensions
+    // and casts are aliases in this model; state and module interfaces are leaves.
+    val arrivals = mutable.HashMap.empty[String, Int]
+    def exprDepth(e: Expression, lookup: String => Int): Int = e match {
+      case r: Reference => lookup(r.name)
+      case _ =>
+        var childDepth = 0
+        e.mapExpr { child => childDepth = childDepth.max(exprDepth(child, lookup)); child }
+        val cost = e match {
+          case DoPrim(Pad | AsUInt | AsSInt, _, _, _) => 0
+          case _: Literal | _: SubField | _: SubIndex => 0
+          case _ => 1
+        }
+        childDepth + cost
+    }
+    def references(e: Expression): Seq[String] = {
+      val found = mutable.ArrayBuffer.empty[String]
+      def visit(x: Expression): Expression = {
+        x match { case r: Reference if definitions.contains(r.name) => found += r.name; case _ => }
+        x.mapExpr(visit)
+        x
+      }
+      visit(e)
+      found.toVector
+    }
+    def arrival(e: Expression): Int = {
+      // An explicit stack also handles chains with thousands of named operators.
+      var pending = references(e).map(_ -> false).toList
+      val visiting = mutable.HashSet.empty[String]
+      while (pending.nonEmpty) {
+        val (name, ready) = pending.head
+        pending = pending.tail
+        if (!arrivals.contains(name)) {
+          if (ready) {
+            arrivals(name) = exprDepth(definitions(name).value, n => arrivals.getOrElse(n, 0))
+            visiting -= name
+          } else {
+            require(visiting.add(name), s"Combinational cycle at ${m.name}.$name")
+            pending = references(definitions(name).value).map(_ -> false).toList :::
+              ((name -> true) :: pending)
+          }
+        }
+      }
+      exprDepth(e, n => arrivals.getOrElse(n, 0))
+    }
 
     // Resolve only single-use nodes, aliases, and lossless extensions leading to
     // the same operator. A failed lookup leaves the entire operand untouched.
@@ -105,7 +171,6 @@ object BalanceAssociativeOps extends Pass {
         }
       }
     }
-    val namespace = Namespace(m)
     val removed = mutable.HashSet.empty[String]
     val replacements = mutable.HashMap.empty[String, Seq[Statement]]
     candidates.filterNot(n => hasParent(n.name)).foreach { n =>
@@ -129,6 +194,7 @@ object BalanceAssociativeOps extends Pass {
       val balancedDepth = if (leaves.size <= 1) 0
         else 32 - Integer.numberOfLeadingZeros(leaves.size - 1)
       if (leaves.size >= 4 && oldDepth > balancedDepth) {
+        val before = arrival(root)
         val generated = mutable.ArrayBuffer.empty[Statement]
         def emit(e: Expression): Expression = {
           val name = namespace.newName("__rteaal_balance")
@@ -171,8 +237,15 @@ object BalanceAssociativeOps extends Pass {
           }
         }
         tree(0, leaves.size, top = true)
-        removed ++= consumed
-        replacements(n.name) = generated.toVector
+        val newArrivals = mutable.HashMap.empty[String, Int]
+        generated.foreach { case d: DefNode =>
+          newArrivals(d.name) = exprDepth(d.value,
+            name => newArrivals.getOrElse(name, arrivals.getOrElse(name, 0)))
+        }
+        if (newArrivals(n.name) < before) {
+          removed ++= consumed
+          replacements(n.name) = generated.toVector
+        }
       }
     }
     if (replacements.isEmpty) m
@@ -181,6 +254,12 @@ object BalanceAssociativeOps extends Pass {
         case b: Block => Seq(b.copy(stmts = b.stmts.flatMap(rewrite)))
         case d: DefNode if replacements.contains(d.name) => replacements(d.name)
         case d: DefNode if removed(d.name) => Seq.empty
+        case x if statementRoots.containsKey(x) =>
+          val roots = statementRoots.get(x).filter { case (_, n) => replacements.contains(n.name) }
+          val refs = new java.util.IdentityHashMap[Expression, Expression]
+          roots.foreach { case (e, n) => refs.put(e, WRef(n.name, e.tpe, NodeKind, SourceFlow)) }
+          roots.flatMap { case (_, n) => replacements(n.name) } :+
+            x.mapExpr(e => if (refs.containsKey(e)) refs.get(e) else e)
         case x => Seq(x)
       }
       val rewritten = rewrite(m.body)
