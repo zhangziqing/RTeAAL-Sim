@@ -576,8 +576,14 @@ class EssentCompiler(opt: OptFlags) {
     } else firrtlCompiler.execute(input)
     val simpleCircuit = if (essent.passes.NanhuSimulation.enabled)
       essent.passes.NanhuSimpleExpressions.run(resultState.circuit) else resultState.circuit
+    val normalizedCircuit = if (opt.normalizeMuxIndex && essent.passes.NanhuSimulation.enabled) {
+      val (state, stats) = essent.passes.NormalizeMuxIndex.executeWithStats(
+        resultState.copy(circuit = simpleCircuit))
+      println(s"[mux-index] normalized ${stats.chains} chains (${stats.muxes} muxes)")
+      state.circuit
+    } else simpleCircuit
     val preparedCircuit = if (opt.balanceAssociativeOps) essent.passes.BalanceAssociativeOps
-      .execute(resultState.copy(circuit = simpleCircuit)).circuit else simpleCircuit
+      .execute(resultState.copy(circuit = normalizedCircuit)).circuit else normalizedCircuit
     if (opt.dumpLoFirrtl) {
       val debugFilename = new File(opt.outputDir(), s"$topName.lo.fir")
       val debugWriter = new FileWriter(debugFilename)

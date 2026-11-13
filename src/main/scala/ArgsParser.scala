@@ -23,7 +23,8 @@ case class OptFlags(
     withFST: Boolean = false,
     essentLogLevel: String = "warn",
     firrtlLogLevel: String = "warn",
-    balanceAssociativeOps: Boolean = true) {
+    balanceAssociativeOps: Boolean = true,
+    normalizeMuxIndex: Boolean = false) {
   def inputFileDir() = firInputFile.getParent
   def outputDir() = if (inputFileDir() == null) "" else inputFileDir()
 }
@@ -80,6 +81,10 @@ class ArgsParser {
     opt[Unit]("no-associative-balance").action((_, c) =>
       c.copy(balanceAssociativeOps = false)
     ).text("disable associative tree balancing")
+
+    opt[Unit]("normalize-mux-index").action((_, c) =>
+      c.copy(normalizeMuxIndex = true)
+    ).text("normalize dense two-dimensional mux selectors")
 
     opt[Unit]("dump").action( (_, c) => c.copy(
         dumpLoFirrtl = true)
