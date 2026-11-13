@@ -136,4 +136,13 @@ class FuseConcatOpsTest extends AnyFlatSpec {
     assert(g.fuse().groups == 0)
     assert(g.producers("n1").forall(g.ops.contains))
   }
+
+  it should "preserve operation identities referenced by lookup tables" in {
+    val g = chain(Seq(8, 8, 8, 8))
+    val lookupTarget = g.producers("n3").head
+    assert(g.fuse(Set(lookupTarget)).groups == 1)
+    assert(g.ops.contains(lookupTarget))
+    assert(g.outputs(lookupTarget) == "n3")
+    g.checkEdges()
+  }
 }

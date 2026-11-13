@@ -19,7 +19,7 @@ object FuseConcatOps {
     val cats = HashMap.empty[String, Cat]
     ops.iterator.filter(_._1.startsWith("cat_+_")).foreach { case (op, inputs) =>
       val ordered = inputs.toSeq.flatMap { case (name, positions) => positions.map(_ -> name) }.toMap
-      if (ordered.keySet == Set(0, 1, 2) && outputs.contains(op)) {
+      if (ordered.keySet == Set(0, 1, 2) && outputs.contains(op) && !protectedOutputs(op)) {
         val left = ordered(0)
         val right = ordered(1)
         val out = outputs(op)
