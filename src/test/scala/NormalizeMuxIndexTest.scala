@@ -10,7 +10,6 @@ import scala.collection.mutable
 
 class NormalizeMuxIndexTest extends AnyFlatSpec {
   private val bit = UIntType(IntWidth(1))
-  private val stateType = UIntType(IntWidth(8))
 
   private case class Fixture(circuit: Circuit, rowWidth: Int, colWidth: Int, codes: Seq[Int]) {
     val entries: Int = 1 << (rowWidth + colWidth)
@@ -21,9 +20,11 @@ class NormalizeMuxIndexTest extends AnyFlatSpec {
     case other => Seq(other)
   }
 
-  private def fixture(rowWidth: Int, colWidth: Int, codes: Seq[Int]): Fixture = {
+  private def fixture(rowWidth: Int, colWidth: Int, codes: Seq[Int],
+      defaultCode: Int = 0, dataWidth: Int = 8): Fixture = {
     val rowType = UIntType(IntWidth(rowWidth))
     val colType = UIntType(IntWidth(colWidth))
+    val stateType = UIntType(IntWidth(dataWidth))
     val entries = 1 << (rowWidth + colWidth)
     val ports = Seq(
       Port(NoInfo, "row", Input, rowType),
@@ -53,7 +54,7 @@ class NormalizeMuxIndexTest extends AnyFlatSpec {
       WRef(name, bit, NodeKind, SourceFlow)
     }
 
-    var selected: Expression = WRef("state_0", stateType, PortKind, SourceFlow)
+    var selected: Expression = WRef(s"state_$defaultCode", stateType, PortKind, SourceFlow)
     codes.zipWithIndex.foreach { case (code, position) =>
       val row = code >> colWidth
       val col = code & ((1 << colWidth) - 1)
@@ -154,5 +155,42 @@ class NormalizeMuxIndexTest extends AnyFlatSpec {
     val repeated = fixture(2, 2, Seq(1, 1, 2))
     assert(NormalizeMuxIndex.run(sparse.circuit) == sparse.circuit)
     assert(NormalizeMuxIndex.run(repeated.circuit) == repeated.circuit)
+  }
+
+  it should "preserve arbitrary defaults and output widths across index widths" in {
+    for ((rowWidth, colWidth, dataWidth) <- Seq((1, 1, 1), (2, 3, 17), (4, 1, 8))) {
+      val entries = 1 << (rowWidth + colWidth)
+      val missing = entries / 2
+      val default = entries - 1
+      val codes = (0 until entries).filterNot(_ == missing).reverse
+      val input = fixture(rowWidth, colWidth, codes, default, dataWidth)
+      val (result, stats) = NormalizeMuxIndex.runWithStats(input.circuit)
+      assert(stats.chains == 1 && stats.muxes == entries - 1)
+      firrtl.passes.CheckTypes.run(result)
+      firrtl.passes.CheckWidths.run(result)
+      assert(result.modules.head.ports.find(_.name == "table_out").get.tpe ==
+        UIntType(IntWidth(dataWidth)))
+      for (round <- 0 until 3; index <- 0 until entries) {
+        val mask = (1 << dataWidth) - 1
+        val data = (0 until entries).map(i => (i * 1337 + round * 71) & mask)
+        val row = index >> colWidth
+        val col = index & ((1 << colWidth) - 1)
+        val actual = evaluate(result, row, col, data)
+        assert(actual("table_out") == data(if (index == missing) default else index))
+        assert(actual("table_out") == evaluate(input.circuit, row, col, data)("table_out"))
+      }
+      assert(NormalizeMuxIndex.run(result) == result)
+    }
+  }
+
+  it should "normalize a full domain whose default is unreachable" in {
+    val input = fixture(2, 2, 0 until 16, defaultCode = 7)
+    val (result, stats) = NormalizeMuxIndex.runWithStats(input.circuit)
+    assert(stats.chains == 1 && stats.muxes == 16)
+    val data = (0 until 16).map(i => i * 11)
+    for (index <- 0 until 16)
+      assert(evaluate(result, index >> 2, index & 3, data)("table_out") == data(index))
+    firrtl.passes.CheckTypes.run(result)
+    firrtl.passes.CheckWidths.run(result)
   }
 }
