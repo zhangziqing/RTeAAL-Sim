@@ -291,6 +291,8 @@ class BalanceAssociativeOpsTest extends AnyFlatSpec {
   it should "allow disabling the pass for a reproducible baseline" in {
     val parser = new ArgsParser
     assert(parser.getConfig(Seq("Test.fir")).get.balanceAssociativeOps)
+    assert(!parser.getConfig(Seq("Test.fir")).get.normalizeMuxIndex)
+    assert(parser.getConfig(Seq("--normalize-mux-index", "Test.fir")).get.normalizeMuxIndex)
     assert(!parser.getConfig(Seq("-O0", "Test.fir")).get.balanceAssociativeOps)
     for (level <- Seq("-O1", "-O2", "-O3", "-O4")) {
       assert(parser.getConfig(Seq(level, "Test.fir")).get.balanceAssociativeOps)
