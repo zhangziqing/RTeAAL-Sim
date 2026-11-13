@@ -577,6 +577,17 @@ class TeAALTranspiler(opIndex: HashMap[String, Int]) {
           sb.append(s"${outbuf_str.replace("{}", outputbufIdx.toString)} = (${databuf_str.replace("{}", inputMap(0).toString)} << ${shift}) | ${databuf_str.replace("{}", inputMap(1).toString)};\n")
         }
       }
+      case 29 => {
+        val count = circuitInput(inputMap(0)).toInt
+        val terms = (0 until count).map { i =>
+          val source = databuf_str.replace("{}", inputMap(1 + 2 * i).toString)
+          val offset = circuitInput(inputMap(2 + 2 * i)).toInt
+          s"($source << $offset)"
+        }
+        val dest = if (skip) databuf_str.replace("{}", outIdx.toString)
+                   else outbuf_str.replace("{}", outputbufIdx.toString)
+        sb.append(s"$dest = ${terms.mkString(" | ")};\n")
+      }
       case 18 => {
         // bits
         val shift = circuitInput(inputMap(1)).toInt
@@ -938,6 +949,7 @@ class TeAALTranspiler(opIndex: HashMap[String, Int]) {
     n_loop_map(26) = "out_count = dshr_loop(rptr, databuf_ptr, outbuf_ptr, scratch1, start, out_count, end);"
     n_loop_map(27) = "out_count = dshrS_loop(rptr, databuf_ptr, outbuf_ptr, scratch1, start, out_count, end);"
     n_loop_map(28) = "memw_loop(rptr, databuf_ptr, outbuf_ptr, memory_64_ptr, memory_8_ptr, start, end);"
+    n_loop_map(29) = "catn_loop(rptr, databuf_ptr, outbuf_ptr, start, end);"
     val IUYML = new File(outputDir, s"kernel_IU_${tName}.cc")
     val IUwriter = new FileWriter(IUYML)
     val IUstrings = new StringBuilder()
@@ -975,7 +987,12 @@ class TeAALTranspiler(opIndex: HashMap[String, Int]) {
         layer_op_total += count
 
         if (value != 25 && value != 26 && value != 27) {
-          IUstrings.append(loopBody.replace("start", s"${layer_op_counter}").replace("end", s"${layer_op_counter+count}"))
+          if (value == 29 && out_flag) {
+            IUstrings.append(loopBody.replace("start", "out_count").replace("end", s"out_count + $count"))
+            IUstrings.append(s"\nout_count += $count;\n")
+          } else {
+            IUstrings.append(loopBody.replace("start", s"${layer_op_counter}").replace("end", s"${layer_op_counter+count}"))
+          }
           IUstrings.append("\n")
           if (value != 28)
             layer_op_counter += count

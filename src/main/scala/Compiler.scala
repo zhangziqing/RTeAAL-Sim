@@ -463,6 +463,12 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, outputDir: String, topName:
                   te.bitWidthMetadata)
     tconstp.tconstp_all_func()
 
+    val concatStats = FuseConcatOps.run(te.opInBufferOrder, te.inEdgeBuffer, te.outEdgeBuffer,
+      te.oEBufferR, te.bitWidthMetadata, tconstp.SimDTM_output.toSet ++
+        te.regNextOrder ++ tconstp.muxJumpTable)
+    tconstp.uniqueOps = te.opInBufferOrder.size
+    println(s"[concat] fused ${concatStats.groups} trees, removed ${concatStats.removed} nodes, max inputs ${concatStats.maxInputs}")
+
     val dfGraph = new TeAALDFGraphExtractor(te.opInBufferOrder, te.inEdgeBuffer, te.outEdgeBuffer, te.oEBufferR, 
                   te.bitWidthMetadata, te.regOrder, te.regNextOrder, tconstp.muxJumpTable, te.dshiftGroup, mem_extra_inputs, tconstp.randomChain_Inputs)
     dfGraph.DFGraphGen()

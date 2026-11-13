@@ -338,6 +338,7 @@ class TeAALDFGraphExtractor(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
     opIndex += "dshr"->26
     opIndex += "dshrS"->27
     opIndex += "memw"->28
+    opIndex += "catn"->29
   }
 
   def paramsExtract(): Unit = {
