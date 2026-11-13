@@ -116,4 +116,24 @@ class FuseConcatOpsTest extends AnyFlatSpec {
     unknown.widths.remove("x0")
     assert(unknown.fuse().groups == 0)
   }
+
+  it should "preserve producers with additional output aliases" in {
+    val g = chain(Seq(8, 8, 8))
+    val producer = g.producers("n1").head
+    g.producers("alias") = HashSet(producer)
+    g.widths("alias") = 16
+    g.cat("alias", "x2", "other")
+    assert(g.fuse().groups == 0)
+    assert(g.ops.contains(producer))
+    assert(g.producers("alias").forall(g.ops.contains))
+    g.checkEdges()
+  }
+
+  it should "check actual users when reverse edges omit another consumer" in {
+    val g = chain(Seq(8, 8, 8))
+    val extra = g.cat("n1", "x2", "other")
+    g.users("n1") -= extra
+    assert(g.fuse().groups == 0)
+    assert(g.producers("n1").forall(g.ops.contains))
+  }
 }
