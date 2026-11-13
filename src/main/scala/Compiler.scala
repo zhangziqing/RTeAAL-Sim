@@ -582,8 +582,14 @@ class EssentCompiler(opt: OptFlags) {
       println(s"[mux-index] normalized ${stats.chains} chains (${stats.muxes} muxes)")
       state.circuit
     } else simpleCircuit
+    val reducedCircuit = if (essent.passes.NanhuSimulation.enabled && opt.balanceAssociativeOps) {
+      val (state, stats) = essent.passes.ReduceConstantMuxChains.executeWithStats(
+        resultState.copy(circuit = normalizedCircuit))
+      println(s"[constant-mux] reduced ${stats.chains} chains (${stats.muxes} muxes, longest ${stats.longestChain})")
+      state.circuit
+    } else normalizedCircuit
     val preparedCircuit = if (opt.balanceAssociativeOps) essent.passes.BalanceAssociativeOps
-      .execute(resultState.copy(circuit = normalizedCircuit)).circuit else normalizedCircuit
+      .execute(resultState.copy(circuit = reducedCircuit)).circuit else reducedCircuit
     if (opt.dumpLoFirrtl) {
       val debugFilename = new File(opt.outputDir(), s"$topName.lo.fir")
       val debugWriter = new FileWriter(debugFilename)
