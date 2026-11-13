@@ -30,7 +30,8 @@ class NormalizeMuxIndexTest extends AnyFlatSpec {
       Port(NoInfo, "col", Input, colType)) ++
       (0 until entries).map(i => Port(NoInfo, s"state_$i", Input, stateType)) ++
       Seq(Port(NoInfo, "table_out", Output, stateType),
-        Port(NoInfo, "condition_probe", Output, bit))
+        Port(NoInfo, "condition_probe", Output, bit),
+        Port(NoInfo, "shared_eq_probe", Output, bit))
 
     val nodes = mutable.ArrayBuffer.empty[Statement]
     val rowRefs = (0 until (1 << rowWidth)).map { value =>
@@ -71,6 +72,7 @@ class NormalizeMuxIndexTest extends AnyFlatSpec {
       NodeKind, SourceFlow) else UIntLiteral(0, IntWidth(1))
     nodes += Connect(NoInfo, WRef("table_out", stateType, PortKind, SinkFlow), selected)
     nodes += Connect(NoInfo, WRef("condition_probe", bit, PortKind, SinkFlow), observed)
+    nodes += Connect(NoInfo, WRef("shared_eq_probe", bit, PortKind, SinkFlow), rowRefs(0))
     Fixture(Circuit(NoInfo, Seq(Module(NoInfo, "MuxIndexProbe", ports, Block(nodes.toVector))),
       "MuxIndexProbe"), rowWidth, colWidth, codes)
   }
@@ -126,6 +128,12 @@ class NormalizeMuxIndexTest extends AnyFlatSpec {
     firrtl.passes.CheckTypes.run(result)
     firrtl.passes.CheckWidths.run(result)
     assert(NormalizeMuxIndex.run(result) == result)
+    val graph = StatementGraph(result)
+    val externalPorts = Extract.findExternalPorts(result)
+    val unresolved = graph.nodeRange().filter(id => graph.idToStmt(id) == EmptyStmt)
+      .map(graph.idToName).filterNot(externalPorts.contains)
+    assert(unresolved.isEmpty, s"Unresolved statements after normalization: $unresolved")
+    new Renamer().populateFromSG(graph, externalPorts)
 
     for (round <- 0 until 2; row <- 0 until 64; col <- 0 until 16) {
       val data = (0 until 1024).map(i => (i * 37 + round * 61 + (i >> 3)) & 0xff)
@@ -136,6 +144,8 @@ class NormalizeMuxIndexTest extends AnyFlatSpec {
       assert(actual("table_out") == observed("table_out"), s"round=$round index=$index")
       assert(actual("condition_probe") == (if (row == 0 && col == 1) 1 else 0))
       assert(actual("condition_probe") == observed("condition_probe"))
+      assert(actual("shared_eq_probe") == (if (row == 0) 1 else 0))
+      assert(actual("shared_eq_probe") == observed("shared_eq_probe"))
     }
   }
 

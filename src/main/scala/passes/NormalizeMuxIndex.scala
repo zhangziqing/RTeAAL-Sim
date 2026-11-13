@@ -248,7 +248,7 @@ object NormalizeMuxIndex extends Pass {
       expression.mapExpr(countReferences)
       expression
     }
-    withGenerated.mapExpr(countReferences)
+    flattened(withGenerated).foreach(_.mapExpr(countReferences))
     val deadEqNodes = oldEqNodes.filter(name =>
       !protectedNames(name) && uses(name) == 0 && definitions.get(name).exists(_.value match {
         case primitive: DoPrim => primitive.op == Eq
