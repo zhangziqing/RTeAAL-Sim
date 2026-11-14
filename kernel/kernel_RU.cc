@@ -24,7 +24,6 @@
 
 #include "dtm.h"
 #include "json.hpp"
-#include "concatn.h"
 
 /* DTM related */ 
 dtm_t* dtm;
@@ -563,10 +562,6 @@ ALWAYS_INLINE uint16_t op_ss_3(
                 }
                 output_buffer[counter] = (databuf[input_data[0]] << input_data[2]) | databuf[input_data[1]];
             }
-            return 1;
-        // 29: variable-input concatenation
-        case 29:
-            output_buffer[counter] = concatn_value(rptr, databuf);
             return 1;
         // 18: bits
         case 18:

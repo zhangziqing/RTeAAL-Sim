@@ -366,16 +366,6 @@ void fill_maps(
                     ns_map[opcode].push_back(s[j]);
                     break;
                 }
-                case 29: {
-                    const size_t count = databuf[r[r_iter++]];
-                    nr_map[opcode].push_back(count);
-                    for (size_t k = 0; k < count; ++k) {
-                        nr_map[opcode].push_back(r[r_iter++]);
-                        nr_map[opcode].push_back(databuf[r[r_iter++]]);
-                    }
-                    ns_map[opcode].push_back(s[j]);
-                    break;
-                }
                 case 22: case 23: {
                     uint32_t input_len_idx = r[r_iter++];
                     size_t input_len = static_cast<size_t>(databuf[input_len_idx]);
@@ -537,17 +527,6 @@ void unswizzled_fill_maps(
                     updated_r.push_back(r[r_iter++]);
                     break;
                 }
-                case 29: {
-                    in_s_vec.push_back(s[j]);
-                    updated_n.push_back(opcode);
-                    const size_t count = databuf[r[r_iter++]];
-                    updated_r.push_back(count);
-                    for (size_t k = 0; k < count; ++k) {
-                        updated_r.push_back(r[r_iter++]);
-                        updated_r.push_back(databuf[r[r_iter++]]);
-                    }
-                    break;
-                }
                 case 22: case 23: {
                     in_s_vec.push_back(s[j]);
                     updated_n.push_back(opcode);
@@ -598,10 +577,10 @@ std::vector<uint32_t> build_new_r(const std::map<uint16_t, std::map<uint8_t, std
 
     for (const auto& [i_key, nr_map] : inr_map) {
         for (const auto& [n_key, vec] : nr_map) {
-            if (n_key >= 0 && n_key < 30) {
+            if (n_key >= 0 && n_key < 29) {
                 new_r.insert(new_r.end(), vec.begin(), vec.end());
             } else {
-                std::cerr << "Warning: n_key " << n_key << " out of bounds [0..29]" << std::endl;
+                std::cerr << "Warning: n_key " << n_key << " out of bounds [0..28]" << std::endl;
             }
         }
     }
@@ -609,13 +588,13 @@ std::vector<uint32_t> build_new_r(const std::map<uint16_t, std::map<uint8_t, std
     return new_r;
 }
 
-std::vector<uint32_t> build_all_lens(const std::map<uint16_t, std::map<uint8_t, std::vector<uint32_t>>>& ins_map, size_t opcode_count = 29) {
+std::vector<uint32_t> build_all_lens(const std::map<uint16_t, std::map<uint8_t, std::vector<uint32_t>>>& ins_map) {
     std::vector<uint32_t> all_lens;
 
     for (const auto& [_i_key, ns_map] : ins_map) {
-        std::vector<uint32_t> lens(opcode_count, 0);
+        std::vector<uint32_t> lens(29, 0);
         for (const auto& [n_key, vec] : ns_map) {
-            if (n_key < 30) {
+            if (n_key < 29) {
                 lens[n_key] = vec.size();
             } else {
                 std::cerr << "Warning: n_key " << n_key << " out of bounds [0..33]" << std::endl;
@@ -715,7 +694,7 @@ std::vector<uint32_t> partition_len_generation(
     return all_lens;
 }
 
-std::vector<uint32_t> generate_all_len(const std::vector<uint32_t>& all_lens, size_t opcode_count = 29) {
+std::vector<uint32_t> generate_all_len(const std::vector<uint32_t>& all_lens) {
     std::vector<uint32_t> all_len;
     all_len.reserve(all_lens.size() * 2);
 
@@ -729,7 +708,7 @@ std::vector<uint32_t> generate_all_len(const std::vector<uint32_t>& all_lens, si
 
     for (size_t i = 0; i < all_lens.size(); ++i) {
         uint32_t x = all_lens[i];
-        if (i % opcode_count == 0) {
+        if (i % 29 == 0) {
             accum_op = sum;
             if (!all_len.empty()) {
                 all_len.back() = 0;
@@ -946,8 +925,6 @@ int main(int argc, char* argv[]) {
     fill_maps(layer_pointer, n, s, r, databuf, ins_map, inr_map, is_map);
     std::vector<uint32_t> new_s = map_to_vector_flatten(is_map);
 
-    const size_t opcode_count = std::find(n.begin(), n.end(), 29) == n.end() ? 29 : 30;
-
     // deallocate old tensors to save memory usage
     o = {};
     r = {};
@@ -956,8 +933,8 @@ int main(int argc, char* argv[]) {
     layer_pointer = {};
 
     std::vector<uint32_t> new_r = build_new_r(inr_map);
-    std::vector<uint32_t> all_lens = build_all_lens(ins_map, opcode_count);
-    std::vector<uint32_t> all_len = generate_all_len(all_lens, opcode_count);
+    std::vector<uint32_t> all_lens = build_all_lens(ins_map);
+    std::vector<uint32_t> all_len = generate_all_len(all_lens);
 
     if (dumpVectorToJson(new_r, JSONPATH+prefix+"_rptr.json")) {
         std::cout << "Vector dumped to rptr.json\n";

@@ -24,7 +24,6 @@
 
 #include "dtm.h"
 #include "json.hpp"
-#include "concatn.h"
 
 #define LR(lhs, rhs) \
         uint32_t lhs = *rptr++;     \
@@ -1122,14 +1121,6 @@ ALWAYS_INLINE void stop_loop(
 #else
 #define ALWAYS_INLINE inline
 #endif
-
-ALWAYS_INLINE void catn_loop(
-    const uint32_t*& rptr, const uint64_t* databuf,
-    uint64_t* output_buffer, uint32_t start, uint32_t end
-) {
-    for (uint32_t i = start; i < end; ++i)
-        output_buffer[i] = concatn_value(rptr, databuf);
-}
 
 ALWAYS_INLINE void orchain_loop(
   //  const uint64_t* __restrict& rptr,

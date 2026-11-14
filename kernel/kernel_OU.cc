@@ -24,7 +24,6 @@
 
 #include "dtm.h"
 #include "json.hpp"
-#include "concatn.h"
 
 /* DTM related */ 
 dtm_t* dtm;
@@ -428,9 +427,6 @@ ALWAYS_INLINE uint16_t op_ss_3(
                 uint32_t z = *rptr++;
                 output_buffer[counter] = (databuf[x] << z) | databuf[y];
             }
-            return 1;
-        case 29:
-            output_buffer[counter] = concatn_value(rptr, databuf);
             return 1;
         case 18:
             {

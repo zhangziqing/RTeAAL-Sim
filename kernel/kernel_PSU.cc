@@ -24,7 +24,6 @@
 
 #include "dtm.h"
 #include "json.hpp"
-#include "concatn.h"
 
 #define COPY24() \
     databuf_ptr[*s_ptr++] = outbuf_ptr[j];\
@@ -210,8 +209,7 @@ ALWAYS_INLINE uint16_t op_ss_for_loop(
     uint8_t* __restrict memory_8,
     const uint32_t* __restrict muxJT,
     std::vector<uint64_t>& scratch1,
-    std::vector<uint64_t>& scratch2,
-    bool has_concatn = false
+    std::vector<uint64_t>& scratch2
 ) {
     #define READ_BOUNDS(start, end) \
         uint16_t start = *fptr++;     \
@@ -1117,12 +1115,6 @@ ALWAYS_INLINE uint16_t op_ss_for_loop(
             }
         }
     }
-    // Opcode 29 is appended to the legacy groups only when present.
-    if (has_concatn) {
-        READ_BOUNDS(start, end);
-        for (uint32_t i = start; i < end; ++i)
-            output_buffer[out_count++] = concatn_value(rptr, databuf);
-    }
     return out_count;
 }
 
@@ -1297,7 +1289,6 @@ int main(int argc, char* argv[]) {
     std::vector<uint32_t> new_s = loadVectorFromJson<uint32_t>(JSONPATH + prefix+"_sptr.json");
     std::vector<uint32_t> new_r = loadVectorFromJson<uint32_t>(JSONPATH + prefix+"_rptr.json");
     std::vector<uint16_t> all_len = loadVectorFromJson<uint16_t>(JSONPATH + prefix+"_fptr.json");
-    const bool has_concatn = all_len.size() == layer_num * 60;
 
     // Memory Array Declaration
     // TODO: change them to random initialization after debugging
@@ -1514,7 +1505,7 @@ int main(int argc, char* argv[]) {
 
         for (size_t i = 0; i < layer_num; ++i) {
             // printf("Layer: %zu\n", i);
-            layer_len = op_ss_for_loop( rptr, fptr, databuf_ptr, outbuf_ptr, memory_64_ptr, memory_8_ptr, muxJT_ptr, scratch1, scratch2, has_concatn);
+            layer_len = op_ss_for_loop( rptr, fptr, databuf_ptr, outbuf_ptr, memory_64_ptr, memory_8_ptr, muxJT_ptr, scratch1, scratch2);
             size_t j = 0;
             for (; j + 23 < layer_len; j += 24) {
                 COPY24();
