@@ -14,6 +14,13 @@ class TeAALExtractor(memory_array : LinkedHashMap[String, Int]) {
   val ju = new TeAALUtil()
 
   var op_counter = 0
+  var nestedNodeCounter = 0
+
+  def freshNestedNodeName(): String = {
+    val name = s"nestedNode$nestedNodeCounter"
+    nestedNodeCounter += 1
+    name
+  }
   var opInBufferOrder: opInOrder = HashMap[String, HashMap[String, HashSet[Int]]]()
   var inEdgeBuffer: BufferHashMap = HashMap[String, HashSet[String]]()
   var outEdgeBuffer: BufferHashMap = HashMap[String, HashSet[String]]()
@@ -1652,7 +1659,7 @@ class TeAALExtractor(memory_array : LinkedHashMap[String, Int]) {
       u.serialize
     }
     case m: Mux => {
-      var nName = s"nestedNode${op_counter}"
+      val nName = freshNestedNodeName()
       muxExtract(m, nName)
       nName
     }
@@ -1662,7 +1669,7 @@ class TeAALExtractor(memory_array : LinkedHashMap[String, Int]) {
       result
     }
     case p: DoPrim => {
-      var nName = s"nestedNode${op_counter}"
+      val nName = freshNestedNodeName()
       p.op match {
         case AsClock => throw new Exception("AsClock unimplemented!")
         // case AsAsyncReset  => {
