@@ -47,6 +47,28 @@ class BalancePriorityMuxChainsTest extends AnyFlatSpec {
     chain((0 until n).map(i => ref(s"c$i", bit) -> ref(s"v$i", uint(w))),
       ref("default", uint(w)), ports, inline, alias)
   }
+  private def twoArmFixture(n: Int, w: Int = 8): Circuit = {
+    val ports = (0 until n).flatMap(i => Seq(
+      Port(NoInfo, s"a$i", Input, bit), Port(NoInfo, s"av$i", Input, uint(w)),
+      Port(NoInfo, s"b$i", Input, bit), Port(NoInfo, s"bv$i", Input, uint(w)))) ++
+      Seq(Port(NoInfo, "fire", Input, bit), Port(NoInfo, "out", Output, uint(w)))
+    val statements = mutable.ArrayBuffer.empty[Statement]
+    def build(prefix: String): Expression = {
+      var tail: Expression = ref(s"${prefix}v0", uint(w))
+      (0 until n).reverse.foreach { i =>
+        val value = Mux(ref(s"$prefix$i", bit), ref(s"${prefix}v$i", uint(w)), tail, uint(w))
+        statements += DefNode(NoInfo, s"${prefix}chain_$i", value)
+        tail = ref(s"${prefix}chain_$i", uint(w))
+      }
+      tail
+    }
+    val a = build("a")
+    val b = build("b")
+    statements += Connect(NoInfo, WRef("out", uint(w), PortKind, SinkFlow),
+      Mux(ref("fire", bit), a, b, uint(w)))
+    Circuit(NoInfo, Seq(Module(NoInfo, "TwoArmProbe", ports, Block(statements.toVector))),
+      "TwoArmProbe")
+  }
   private def evaluate(c: Circuit, inputs: Map[String, BigInt]): BigInt = {
     val definitions = body(c).collect { case n: DefNode => n.name -> n.value }.toMap
     val values = mutable.HashMap.from(inputs)
@@ -124,6 +146,30 @@ class BalancePriorityMuxChainsTest extends AnyFlatSpec {
       val prepared = BalanceAssociativeOps.run(result)
       assert(BalancePriorityMuxChains.run(prepared) == prepared)
       verifyTypes(result)
+    }
+  }
+
+  it should "balance both arms of a two-chain selector independently" in {
+    val n = 8
+    val original = twoArmFixture(n)
+    val (state, stats) = BalancePriorityMuxChains.executeWithStats(CircuitState(original, Seq.empty))
+    val result = state.circuit
+    assert(stats.chains == 2 && stats.muxes == 2 * n && stats.longestChain == n)
+    assert(depth(result) < depth(original))
+    assert(BalancePriorityMuxChains.run(result) == result)
+    verifyTypes(result)
+    val aValues = (0 until n).map(i => BigInt(100 + i))
+    val bValues = (0 until n).map(i => BigInt(200 + i))
+    for (fire <- 0 to 1; aMask <- 0 until (1 << n); bMask <- Seq(0, (1 << n) - 1)) {
+      val hitsA = (0 until n).map(i => (aMask & (1 << i)) != 0)
+      val hitsB = (0 until n).map(i => (bMask & (1 << i)) != 0)
+      val inputs = (0 until n).flatMap(i => Seq(
+        s"a$i" -> BigInt(if (hitsA(i)) 1 else 0), s"av$i" -> aValues(i),
+        s"b$i" -> BigInt(if (hitsB(i)) 1 else 0), s"bv$i" -> bValues(i))).toMap +
+        ("fire" -> BigInt(fire))
+      val expected = if (fire != 0) firstHit(hitsA, aValues, aValues(0))
+                     else firstHit(hitsB, bValues, bValues(0))
+      assert(evaluate(result, inputs) == expected, s"fire=$fire a=$aMask b=$bMask")
     }
   }
 

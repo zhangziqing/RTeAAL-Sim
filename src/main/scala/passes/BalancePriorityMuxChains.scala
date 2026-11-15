@@ -122,15 +122,19 @@ object BalancePriorityMuxChains extends Pass {
       visit(e)
       found.toList
     }
+    val updatedArrivals = mutable.HashMap.empty[String, Int]
+    def lookupArrival(name: String): Int =
+      updatedArrivals.getOrElse(name, arrivals.getOrElse(name, 0))
+
     def arrival(e: Expression): Int = {
       var pending = references(e).map(_ -> false)
       val visiting = mutable.HashSet.empty[String]
       while (pending.nonEmpty) {
         val (name, ready) = pending.head
         pending = pending.tail
-        if (!arrivals.contains(name)) {
+        if (!arrivals.contains(name) && !updatedArrivals.contains(name)) {
           if (ready) {
-            arrivals(name) = depth(definitions(name).value, n => arrivals.getOrElse(n, 0))
+            arrivals(name) = depth(definitions(name).value, lookupArrival)
             visiting -= name
           } else {
             require(visiting.add(name), s"Combinational cycle at ${m.name}.$name")
@@ -139,16 +143,65 @@ object BalancePriorityMuxChains extends Pass {
           }
         }
       }
-      depth(e, n => arrivals.getOrElse(n, 0))
+      depth(e, lookupArrival)
     }
 
-    // Inspect maximal false-branch chains only. Reject a whole chain if any
-    // intermediate is shared/protected or has incompatible type information.
-    val children = candidates.flatMap(n => resolve(n.value.asInstanceOf[Mux].fval)._2).toSet
+    // A priority chain is a false-branch spine. When both data arms of a mux
+    // are themselves long chains, the mux is a selector: each arm is an
+    // independent chain and the selector itself is retained. Classifying
+    // lengths in definition order makes nested arms disjoint roots instead of
+    // suffixes of one another.
+    val chainLengths = mutable.HashMap.empty[String, Int]
+    val selectors = mutable.HashMap.empty[String, Boolean]
+
+    def chainLengthOf(e: Expression): Int = e match {
+      case r: Reference if definitions.contains(r.name) =>
+        val (value, names) = resolve(r)
+        names.lastOption.flatMap(chainLengths.get) match {
+          case Some(length) => length
+          case None => value match {
+            case mux: Mux =>
+              val f = chainLengthOf(mux.fval)
+              val t = chainLengthOf(mux.tval)
+              if (t >= minChainLength && f >= minChainLength) 0 else 1 + f
+            case _ => 0
+          }
+        }
+      case mux: Mux =>
+        val f = chainLengthOf(mux.fval)
+        val t = chainLengthOf(mux.tval)
+        if (t >= minChainLength && f >= minChainLength) 0 else 1 + f
+      case _ => 0
+    }
+
+    candidates.foreach { n =>
+      val mux = n.value.asInstanceOf[Mux]
+      val t = chainLengthOf(mux.tval)
+      val f = chainLengthOf(mux.fval)
+      val selector = t >= minChainLength && f >= minChainLength
+      selectors(n.name) = selector
+      chainLengths(n.name) = if (selector) 0 else 1 + f
+    }
+
+    // Only the false arm of a non-selector is an interior node. A selector
+    // keeps both arms as independent roots, including when one arm later
+    // turns out to be unsupported and the other can still be balanced.
+    val children = mutable.HashSet.empty[String]
+    candidates.foreach { n =>
+      if (!selectors(n.name)) {
+        val mux = n.value.asInstanceOf[Mux]
+        val (_, names) = resolve(mux.fval)
+        children ++= names
+      }
+    }
+
+    // Reject a whole chain if any interior is shared/protected or has
+    // incompatible type information; selected arms are independent chains.
     val removed = mutable.HashSet.empty[String]
     val replacements = mutable.HashMap.empty[String, Seq[Statement]]
     var stats = Stats()
-    candidates.filterNot(n => children(n.name) || protectedNames(n.name)).foreach { root =>
+    candidates.filter(n => !selectors(n.name) && !children(n.name) &&
+      !protectedNames(n.name) && chainLengths(n.name) >= minChainLength).foreach { root =>
       val entries = mutable.ArrayBuffer.empty[(Expression, Expression)]
       val consumed = mutable.HashSet.empty[String]
       val seen = mutable.HashSet.empty[String]
@@ -158,8 +211,9 @@ object BalancePriorityMuxChains extends Pass {
       var done = false
       while (valid && !done) {
         val (value, names) = resolve(current)
+        val boundary = names.lastOption.flatMap(selectors.get).contains(true)
         value match {
-          case mux: Mux =>
+          case mux: Mux if !boundary =>
             valid = current.tpe == tpe && names.forall(name => seen.add(name) && uses(name) == 1 &&
               !protectedNames(name) && definitions(name).value.tpe == tpe) &&
               mux.cond.tpe == bit && mux.tpe == tpe && mux.tval.tpe == tpe && mux.fval.tpe == tpe
@@ -170,6 +224,8 @@ object BalancePriorityMuxChains extends Pass {
             }
           case _ =>
             // Retain the original default expression and all its definitions.
+            // A selector is a boundary: its arms have already been classified
+            // as independent chains and the selector itself stays in place.
             valid = current.tpe == tpe && value.tpe == tpe && !names.exists(consumed) &&
               names.forall(name => definitions(name).value.tpe == tpe)
             done = true
@@ -204,13 +260,16 @@ object BalancePriorityMuxChains extends Pass {
           val newArrivals = mutable.HashMap.empty[String, Int]
           generated.foreach { case n: DefNode =>
             newArrivals(n.name) = depth(n.value,
-              name => newArrivals.getOrElse(name, arrivals.getOrElse(name, 0)))
+              name => newArrivals.getOrElse(name, lookupArrival(name)))
           }
           // Account for original condition/data arrival times, and avoid
           // rebalancing an already balanced tree's short false spine on reruns.
           if (newArrivals(root.name) < before) {
             removed ++= consumed
             replacements(root.name) = generated.toVector
+            // Later chains must see the balanced subtrees, not their old
+            // linear definitions, when estimating their own arrival depth.
+            updatedArrivals(root.name) = newArrivals(root.name)
             val length = entries.size - 1
             stats = stats.copy(chains = stats.chains + 1, muxes = stats.muxes + length,
               longestChain = stats.longestChain.max(length))
