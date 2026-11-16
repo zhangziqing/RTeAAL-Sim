@@ -478,6 +478,35 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, outputDir: String, topName:
       else BalanceAndOrOps.Stats()
     println(s"[and-or-tree] balanced ${andOrStats.groups} trees (${andOrStats.nodes} nodes, ${andOrStats.clones} clones, max inputs ${andOrStats.maxInputs})")
 
+    val projectSlices = opt.projectSlices || sys.props.get("rteaal.projectSlices").contains("true")
+    val composeUpdates = opt.composeMaskedUpdates || sys.props.get("rteaal.composeMaskedUpdates").contains("true")
+    if (projectSlices || composeUpdates || sys.props.contains("rteaal.sliceReport")) {
+      val report = sys.props.get("rteaal.sliceReport").map(path => new java.io.PrintWriter(path))
+      try {
+        val maxGrowth = sys.props.get("rteaal.sliceMaxGrowth").map(_.toInt).getOrElse(64)
+        require(maxGrowth >= 0 && maxGrowth <= 8192, "sliceMaxGrowth must be in [0, 8192]")
+        val budget = ProjectSlices.Budget(maxGrowth = maxGrowth)
+        report.foreach(_.println(ujson.write(ujson.Obj("stage" -> "configuration",
+          "projection_enabled" -> projectSlices, "composition_enabled" -> composeUpdates,
+          "concat_encoding" -> "binary",
+          "max_visits_per_request" -> 2048, "max_cached_slices" -> 200000,
+          "max_added_operators_per_candidate" -> 2048, "max_net_growth_per_candidate" -> budget.maxGrowth,
+          "max_net_growth_total" -> 8192, "max_candidates" -> 20000))))
+        val graph = new SliceGraph.Graph(te.opInBufferOrder, te.inEdgeBuffer, te.outEdgeBuffer,
+          te.oEBufferR, te.bitWidthMetadata, tconstp.SimDTM_output.toSet ++ te.regNextOrder ++
+            tconstp.muxJumpTable, te.regOrder.toSet)
+        val projection = ProjectSlices.run(graph, projectSlices, report, budget)
+        println(s"[projection] candidates ${projection.candidates}, applied ${projection.applied}, added ${projection.added}, removed ${projection.removed}")
+        val composition = ComposeMaskedUpdates.run(graph, composeUpdates, report, budget)
+        println(s"[masked-updates] candidates ${composition.candidates}, applied ${composition.applied}, added ${composition.added}, removed ${composition.removed}")
+      } finally report.foreach(_.close())
+      if (sys.props.get("rteaal.sliceAnalysisOnly").contains("true")) return
+      if (projectSlices || composeUpdates) BalanceConcatOps.run(te.opInBufferOrder, te.inEdgeBuffer,
+        te.outEdgeBuffer, te.oEBufferR, te.bitWidthMetadata, tconstp.SimDTM_output.toSet ++
+          te.regNextOrder ++ tconstp.muxJumpTable)
+      tconstp.uniqueOps = te.opInBufferOrder.size
+    }
+
     val dfGraph = new TeAALDFGraphExtractor(te.opInBufferOrder, te.inEdgeBuffer, te.outEdgeBuffer, te.oEBufferR, 
                   te.bitWidthMetadata, te.regOrder, te.regNextOrder, tconstp.muxJumpTable, te.dshiftGroup, mem_extra_inputs, tconstp.randomChain_Inputs)
     dfGraph.DFGraphGen()

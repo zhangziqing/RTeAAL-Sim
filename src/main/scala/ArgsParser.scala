@@ -24,7 +24,9 @@ case class OptFlags(
     essentLogLevel: String = "warn",
     firrtlLogLevel: String = "warn",
     balanceAssociativeOps: Boolean = true,
-    normalizeMuxIndex: Boolean = false) {
+    normalizeMuxIndex: Boolean = false,
+    projectSlices: Boolean = false,
+    composeMaskedUpdates: Boolean = false) {
   def inputFileDir() = firInputFile.getParent
   def outputDir() = if (inputFileDir() == null) "" else inputFileDir()
 }
@@ -85,6 +87,11 @@ class ArgsParser {
     opt[Unit]("normalize-mux-index").action((_, c) =>
       c.copy(normalizeMuxIndex = true)
     ).text("normalize dense two-dimensional mux selectors")
+
+    opt[Unit]("project-slices").action((_, c) => c.copy(projectSlices = true))
+      .text("experimentally project demanded scalar bit ranges before tensor layering")
+    opt[Unit]("compose-masked-updates").action((_, c) => c.copy(composeMaskedUpdates = true))
+      .text("experimentally compose proven independent masked register updates")
 
     opt[Unit]("dump").action( (_, c) => c.copy(
         dumpLoFirrtl = true)
