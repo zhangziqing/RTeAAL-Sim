@@ -1,4 +1,6 @@
 # RTeAAL Sim
+
+Nanhu fork changes and verification: [docs/NANHU.md](docs/NANHU.md).
 This repository is the open-source artifact for our ASPLOS 2026 paper *RTeAAL Sim: Using Tensor Algebra to Represent and Accelerate RTL Simulation*.
 
 ## Introduction
