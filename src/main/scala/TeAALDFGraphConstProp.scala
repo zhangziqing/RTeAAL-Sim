@@ -621,7 +621,10 @@ class TeAALDFGraphConstProp(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
               val allOk = muxBadCounts.forall { case (hasBad, has0) => !hasBad || has0 }
               val allMuxAndIdxOk = allOk || countBad > 1
 
-              if (allMuxAndIdxOk) {
+              // Traceback stops at shared outputs. Start a chain here even
+              // when one consumer uses the output as a mux data arm.
+              val sharedOutput = inEdgeBuffer(outName).size > 1
+              if (sharedOutput || allMuxAndIdxOk) {
                 ret += op
               }
             }
