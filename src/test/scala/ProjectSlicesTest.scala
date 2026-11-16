@@ -63,15 +63,54 @@ class ProjectSlicesTest extends AnyFlatSpec {
   it should "project crossing binary and variadic fields including repeated operands" in {
     for (variadic <- Seq(false, true)) {
       val f = new ProjectionFixture
-      f.input("x", 8); f.input("y", 8)
+      f.input("rawX", 64); f.input("rawY", 64)
+      f.add("and", "x", 8, "rawX", "255")
+      f.add("and", "y", 8, "rawY", "255")
       if (variadic) f.add("catn", "cat", 24, "3", "x", "16", "y", "8", "x", "0")
       else { f.add("cat", "xy", 16, "x", "y", "8"); f.add("cat", "cat", 24, "xy", "x", "8") }
       f.add("bits", "out", 10, "cat", "6", "1023")
       assert(ProjectSlices.run(f.graph(), enabled = true).applied > 0)
       for (x <- 0 until 256 by 7; y <- 0 until 256 by 13) {
-        val v = Map("x" -> BigInt(x), "y" -> BigInt(y))
+        val v = Map("rawX" -> BigInt(x), "rawY" -> BigInt(y))
         assert(f.evaluate("out", v) == (((BigInt(x) << 16) | (BigInt(y) << 8) | x) >> 6 & 1023))
       }
+      f.checkEdges()
+    }
+  }
+  it should "retain a variadic slice when required host masks add cost without reducing depth" in {
+    val f = new ProjectionFixture
+    f.input("x", 8); f.input("y", 8)
+    f.add("catn", "cat", 24, "3", "x", "16", "y", "8", "x", "0")
+    f.add("bits", "out", 10, "cat", "6", "1023")
+    val before = f.ops.map { case (op, in) => op -> in.map { case (s, ps) => s -> ps.toSet }.toMap }.toMap
+    val reportText = new java.io.StringWriter
+    val report = new java.io.PrintWriter(reportText)
+    assert(ProjectSlices.run(f.graph(), enabled = true, report = Some(report)).applied == 0)
+    report.flush()
+    val candidate = ujson.read(reportText.toString.trim)
+    assert(candidate("reason").str == "no-depth-benefit")
+    assert(candidate("original_depth").num == candidate("projected_depth").num)
+    assert(candidate("net_operators").num > 0)
+    assert(f.ops.map { case (op, in) => op -> in.map { case (s, ps) => s -> ps.toSet }.toMap }.toMap == before)
+    for (x <- Seq(0, 1, 127, 128, 255); y <- Seq(0, 1, 127, 128, 255)) {
+      val word = (BigInt(x) << 16) | (BigInt(y) << 8) | x
+      assert(f.evaluate("out", Map("x" -> BigInt(x), "y" -> BigInt(y))) == (word >> 6 & 1023))
+    }
+    f.checkEdges()
+  }
+  it should "normalize unproven narrow host references through assignment chains" in {
+    for (w <- Seq(1, 6, 7, 8, 31, 32, 63, 64)) {
+      val f = new ProjectionFixture
+      f.input("x", w)
+      f.add("assign", "producer", w, "x")
+      f.add("assign", "middle", w, "producer")
+      f.add("and", "out", w, "middle", mask(w).toString)
+      val values = Seq(BigInt(0), BigInt(1), mask(w), mask(64), mask(64) - 1,
+        BigInt(1) << (w - 1), mask(64) ^ mask(w)).distinct
+      val expected = values.map(v => v -> (v & mask(w)))
+      expected.foreach { case (v, result) => assert(f.evaluate("out", Map("x" -> v)) == result) }
+      assert(ProjectSlices.run(f.graph(), enabled = true).applied > 0)
+      expected.foreach { case (v, result) => assert(f.evaluate("out", Map("x" -> v)) == result) }
       f.checkEdges()
     }
   }
@@ -166,7 +205,7 @@ class ProjectSlicesTest extends AnyFlatSpec {
   it should "include the final assignment in whole-reference depth and growth decisions" in {
     val f = new ProjectionFixture
     f.input("x", 8)
-    f.add("assign", "producer", 8, "x")
+    f.add("and", "producer", 8, "x", "255")
     f.add("assign", "out", 8, "x")
     val g = f.graph()
     val pool = new Pool
