@@ -23,6 +23,9 @@ simulation environment:
 - `FactorMuxBitwise.scala` exposes shared AND/OR/XOR operands before mux
   optimization. Shared mux outputs remain eligible lookup roots when they
   also feed a mux data input.
+- Optional slice projection shortens demanded bit ranges with explicit host
+  normalization. Ordered masked-update composition combines proven independent
+  register fields while preserving overwrite order and state dependencies.
 
 The Nanhu harness is opt-in with the JVM property `-Drteaal.nanhu=true`.
 Dense mux normalization additionally requires `--normalize-mux-index`.
@@ -48,10 +51,14 @@ The independent smoke programs above are preserved from the workspace's
 existing checks. They cover bitwise mux semantics at widths 1, 8 and 65, and
 shared lookup consumers and dependencies.
 
-The `experimental/slice-projection` branch separately preserves the workspace's
-slice projection and ordered masked-update composition work. Its publication
-snapshot has two failing projection tests; those changes are not enabled by
-this branch.
+Slice projection requires `--project-slices`; ordered masked-update composition
+requires `--compose-masked-updates`. Both are off by default. Their contracts,
+fixture corrections and verification are documented in
+[SLICE_PROJECTION.md](SLICE_PROJECTION.md). The latest cached-dependency run
+passed all 101 ScalaTest tests, all 54 bitwise semantic comparisons and the
+shared-root smoke. The real Nanhu PLRU fixture was available; no tests were
+canceled. Dependency resolution, `sbt test` and assembly were not rerun for
+this integration.
 
 ## Verification boundary
 
