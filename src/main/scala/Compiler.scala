@@ -469,6 +469,14 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, outputDir: String, topName:
       else BalanceConcatOps.Stats()
     tconstp.uniqueOps = te.opInBufferOrder.size
     println(s"[concat-tree] balanced ${concatStats.groups} trees (${concatStats.nodes} nodes, max inputs ${concatStats.maxInputs})")
+    // Experimental graph-level pass; keep it opt-in until a layer benefit is
+    // demonstrated on an accepted target.
+    val andOrEnabled = sys.props.get("rteaal.balanceAndOr").contains("true")
+    val andOrStats = if (opt.balanceAssociativeOps && andOrEnabled) BalanceAndOrOps.run(
+      te.opInBufferOrder, te.inEdgeBuffer, te.outEdgeBuffer, te.oEBufferR,
+      te.bitWidthMetadata, tconstp.SimDTM_output.toSet ++ te.regNextOrder ++ tconstp.muxJumpTable)
+      else BalanceAndOrOps.Stats()
+    println(s"[and-or-tree] balanced ${andOrStats.groups} trees (${andOrStats.nodes} nodes, ${andOrStats.clones} clones, max inputs ${andOrStats.maxInputs})")
 
     val dfGraph = new TeAALDFGraphExtractor(te.opInBufferOrder, te.inEdgeBuffer, te.outEdgeBuffer, te.oEBufferR, 
                   te.bitWidthMetadata, te.regOrder, te.regNextOrder, tconstp.muxJumpTable, te.dshiftGroup, mem_extra_inputs, tconstp.randomChain_Inputs)
@@ -583,24 +591,36 @@ class EssentCompiler(opt: OptFlags) {
     } else firrtlCompiler.execute(input)
     val simpleCircuit = if (essent.passes.NanhuSimulation.enabled)
       essent.passes.NanhuSimpleExpressions.run(resultState.circuit) else resultState.circuit
-    val normalizedCircuit = if (opt.normalizeMuxIndex && essent.passes.NanhuSimulation.enabled) {
-      val (state, stats) = essent.passes.NormalizeMuxIndex.executeWithStats(
+    val factoredCircuit = if (essent.passes.NanhuSimulation.enabled && opt.balanceAssociativeOps) {
+      val (state, stats) = essent.passes.FactorMuxBitwise.executeWithStats(
         resultState.copy(circuit = simpleCircuit))
-      println(s"[mux-index] normalized ${stats.chains} chains (${stats.muxes} muxes)")
+      println(s"[mux-bitwise] factored AND=${stats.andMuxes} OR=${stats.orMuxes} XOR=${stats.xorMuxes}, removed ${stats.removedNodes} nodes, depth skips ${stats.depthRejected}")
       state.circuit
     } else simpleCircuit
+    val normalizedCircuit = if (opt.normalizeMuxIndex && essent.passes.NanhuSimulation.enabled) {
+      val (state, stats) = essent.passes.NormalizeMuxIndex.executeWithStats(
+        resultState.copy(circuit = factoredCircuit))
+      println(s"[mux-index] normalized ${stats.chains} chains (${stats.muxes} muxes)")
+      state.circuit
+    } else factoredCircuit
     val reducedCircuit = if (essent.passes.NanhuSimulation.enabled && opt.balanceAssociativeOps) {
       val (state, stats) = essent.passes.ReduceConstantMuxChains.executeWithStats(
         resultState.copy(circuit = normalizedCircuit))
       println(s"[constant-mux] reduced ${stats.chains} chains (${stats.muxes} muxes, longest ${stats.longestChain})")
       state.circuit
     } else normalizedCircuit
-    val priorityCircuit = if (essent.passes.NanhuSimulation.enabled && opt.balanceAssociativeOps) {
-      val (state, stats) = essent.passes.BalancePriorityMuxChains.executeWithStats(
+    val foldedMux1HCircuit = if (essent.passes.NanhuSimulation.enabled && opt.balanceAssociativeOps) {
+      val (state, stats) = essent.passes.FoldDecoderMux1H.executeWithStats(
         resultState.copy(circuit = reducedCircuit))
-      println(s"[priority-mux] balanced ${stats.chains} chains (${stats.muxes} muxes, longest ${stats.longestChain}, lookup skips ${stats.lookupChainsSkipped})")
+      println(s"[decoder-mux1h] folded ${stats.compositions} compositions (${stats.entries} entries, ${stats.decoderBits} decoder bits, skipped wide ${stats.skippedWide}, stage ${stats.skippedStage})")
       state.circuit
     } else reducedCircuit
+    val priorityCircuit = if (essent.passes.NanhuSimulation.enabled && opt.balanceAssociativeOps) {
+      val (state, stats) = essent.passes.BalancePriorityMuxChains.executeWithStats(
+        resultState.copy(circuit = foldedMux1HCircuit))
+      println(s"[priority-mux] balanced ${stats.chains} chains (${stats.muxes} muxes, longest ${stats.longestChain}, lookup skips ${stats.lookupChainsSkipped})")
+      state.circuit
+    } else foldedMux1HCircuit
     val preparedCircuit = if (opt.balanceAssociativeOps) essent.passes.BalanceAssociativeOps
       .execute(resultState.copy(circuit = priorityCircuit)).circuit else priorityCircuit
     if (opt.dumpLoFirrtl) {
