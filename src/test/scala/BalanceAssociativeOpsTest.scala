@@ -288,6 +288,84 @@ class BalanceAssociativeOpsTest extends AnyFlatSpec {
     }
   }
 
+  it should "balance trees inside conditional branches without crossing scopes" in {
+    val t = UIntType(IntWidth(8))
+    val bit = UIntType(IntWidth(1))
+    def ref(name: String, tpe: Type = t): Expression = WRef(name, tpe, NodeKind, SourceFlow)
+    def chainNodes(op: PrimOp, prefix: String, leaves: Seq[Expression]): (Seq[Statement], Expression) = {
+      val nodes = mutable.ArrayBuffer.empty[Statement]
+      var value = leaves.head
+      leaves.tail.zipWithIndex.foreach { case (rhs, i) =>
+        val p = DoPrim(op, Seq(value, rhs), Seq.empty, t)
+        nodes += DefNode(NoInfo, s"$prefix${i + 1}", p)
+        value = ref(s"$prefix${i + 1}")
+      }
+      nodes.toSeq -> value
+    }
+    val inputs = (0 until 8).map(i => Port(NoInfo, s"x$i", Input, t))
+    val shared = DefNode(NoInfo, "shared", DoPrim(And, Seq(ref("x0"), ref("x1")), Seq.empty, t))
+    val (andNodes, andValue) = chainNodes(And, "and", ref("shared") +: (2 until 8).map(i => ref(s"x$i")))
+    val (orNodes, orValue) = chainNodes(Or, "or", (0 until 8).map(i => ref(s"x$i")))
+    val body = Block(Seq(
+      shared,
+      Connect(NoInfo, WRef("sharedOut", t, PortKind, SinkFlow), ref("shared")),
+      Conditionally(NoInfo, WRef("p", bit, PortKind, SourceFlow),
+        Block(andNodes :+ Connect(NoInfo, WRef("out", t, PortKind, SinkFlow), andValue)),
+        Block(orNodes :+ Connect(NoInfo, WRef("out", t, PortKind, SinkFlow), orValue)))))
+    val original = Circuit(NoInfo, Seq(Module(NoInfo, "ConditionalTest",
+      inputs ++ Seq(Port(NoInfo, "p", Input, bit), Port(NoInfo, "out", Output, t),
+        Port(NoInfo, "sharedOut", Output, t)), body)), "ConditionalTest")
+    val result = BalanceAssociativeOps.run(original)
+    val resultBody = result.modules.head.asInstanceOf[Module].body.asInstanceOf[Block].stmts
+    assert(resultBody.exists { case DefNode(_, "shared", _) => true; case _ => false })
+    val conditional = resultBody.collectFirst { case c: Conditionally => c }.get
+    def branchDepth(statement: Statement): Int = {
+      val depths = mutable.HashMap.empty[String, Int].withDefaultValue(0)
+      def d(e: Expression): Int = e match {
+        case r: Reference => depths(r.name)
+        case p: DoPrim => p.args.map(d).max + 1
+        case _ => 0
+      }
+      def visit(s: Statement): Unit = s match {
+        case b: Block => b.stmts.foreach(visit)
+        case n: DefNode => depths(n.name) = d(n.value)
+        case Connect(_, r: WRef, e) if r.name == "out" => depths("out") = d(e)
+        case _ =>
+      }
+      visit(statement)
+      depths("out")
+    }
+    assert(branchDepth(conditional.conseq) == 3)
+    assert(branchDepth(conditional.alt) == 3)
+    def evaluate(c: Circuit, xs: Seq[BigInt], p: BigInt): BigInt = {
+      val values = mutable.HashMap.from(xs.zipWithIndex.map { case (v, i) => s"x$i" -> v })
+      values("p") = p
+      def eval(e: Expression): BigInt = e match {
+        case r: Reference => values(r.name)
+        case l: UIntLiteral => l.value
+        case DoPrim(And, args, _, _) => eval(args(0)) & eval(args(1))
+        case DoPrim(Or, args, _, _) => eval(args(0)) | eval(args(1))
+        case other => sys.error(s"unexpected $other")
+      }
+      def visit(s: Statement): Unit = s match {
+        case b: Block => b.stmts.foreach(visit)
+        case c: Conditionally => visit(if (eval(c.pred) != 0) c.conseq else c.alt)
+        case n: DefNode => values(n.name) = eval(n.value)
+        case Connect(_, r: WRef, e) => values(r.name) = eval(e)
+        case _ =>
+      }
+      visit(c.modules.head.asInstanceOf[Module].body)
+      values("out")
+    }
+    val random = new scala.util.Random(20261116L)
+    val samples = Seq(Seq.fill(8)(BigInt(0)), Seq.fill(8)(BigInt(255))) ++
+      Seq.fill(64)((0 until 8).map(_ => BigInt(8, random)))
+    samples.foreach { xs =>
+      assert(evaluate(original, xs, 1) == evaluate(result, xs, 1))
+      assert(evaluate(original, xs, 0) == evaluate(result, xs, 0))
+    }
+  }
+
   it should "allow disabling the pass for a reproducible baseline" in {
     val parser = new ArgsParser
     assert(parser.getConfig(Seq("Test.fir")).get.balanceAssociativeOps)
