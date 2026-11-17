@@ -1065,8 +1065,9 @@ class TeAALDFGraphConstProp(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
 
     def new_rvmEqCond(new_muxChainInfo: HashMap[ArrayBuffer[Int], ArrayBuffer[String]], new_muxRecord: HashMap[Int, HashMap[String, String]]): Unit = {
       val realOpcount = ArrayBuffer(new_muxChainInfo.keys.flatten.toSeq: _*)
+      val indexedOpcounts = if (essent.passes.NanhuSimulation.enabled) realOpcount.toSet else Set.empty[Int]
       new_muxRecord foreach {case(opCount, mux)=>{
-        if (realOpcount.contains(opCount)) {
+        if (if (essent.passes.NanhuSimulation.enabled) indexedOpcounts.contains(opCount) else realOpcount.contains(opCount)) {
           val condName = mux("condName")
           if (outEdgeBuffer.contains(condName)) {
             if (inEdgeBuffer(condName).size == 1) {
@@ -1632,6 +1633,7 @@ class TeAALDFGraphConstProp(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
       val sortedKeys = orExtract.toArray.sorted
 
       val groupedContiguousKeys = HashSet[HashSet[Int]]()
+      val groupByCount = HashMap[Int, HashSet[Int]]()
 
       for (or_count <- sortedKeys) {
         val op = s"or_+_${or_count}"
@@ -1642,14 +1644,22 @@ class TeAALDFGraphConstProp(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
             val in_op = outEdgeBuffer(key).head
             if (in_op.startsWith("or_+_") && opInBufferOrder.contains(in_op)) {
               val cur_count = in_op.replace("or_+_", "").toInt
-              for (group <- groupedContiguousKeys) {
-                // println(group)
-                if (!inserted) {
-                  if (group.contains(cur_count)) {
-                    // println("here?", group)
-                    group += or_count
-                    // println("after", group)
-                    inserted = true
+              if (essent.passes.NanhuSimulation.enabled) {
+                if (!inserted) groupByCount.get(cur_count).foreach { group =>
+                  group += or_count
+                  groupByCount(or_count) = group
+                  inserted = true
+                }
+              } else {
+                for (group <- groupedContiguousKeys) {
+                  // println(group)
+                  if (!inserted) {
+                    if (group.contains(cur_count)) {
+                      // println("here?", group)
+                      group += or_count
+                      // println("after", group)
+                      inserted = true
+                    }
                   }
                 }
               }
@@ -1658,7 +1668,9 @@ class TeAALDFGraphConstProp(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
         }
 
         if (!inserted) {
-          groupedContiguousKeys += HashSet(or_count)
+          val group = HashSet(or_count)
+          groupedContiguousKeys += group
+          if (essent.passes.NanhuSimulation.enabled) groupByCount(or_count) = group
         }
       }
 
@@ -1769,6 +1781,7 @@ class TeAALDFGraphConstProp(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
 
       val sortedKeys = orExtract.toArray.sorted
       val groupedContiguousKeys = HashSet[HashSet[Int]]()
+      val groupByCount = HashMap[Int, HashSet[Int]]()
 
       for (or_count <- sortedKeys) {
         val op = s"xor_+_${or_count}"
@@ -1779,14 +1792,22 @@ class TeAALDFGraphConstProp(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
             val in_op = outEdgeBuffer(key).head
             if (in_op.startsWith("xor_+_") && opInBufferOrder.contains(in_op)) {
               val cur_count = in_op.replace("xor_+_", "").toInt
-              for (group <- groupedContiguousKeys) {
-                // println(group)
-                if (!inserted) {
-                  if (group.contains(cur_count)) {
-                    // println("here?", group)
-                    group += or_count
-                    // println("after", group)
-                    inserted = true
+              if (essent.passes.NanhuSimulation.enabled) {
+                if (!inserted) groupByCount.get(cur_count).foreach { group =>
+                  group += or_count
+                  groupByCount(or_count) = group
+                  inserted = true
+                }
+              } else {
+                for (group <- groupedContiguousKeys) {
+                  // println(group)
+                  if (!inserted) {
+                    if (group.contains(cur_count)) {
+                      // println("here?", group)
+                      group += or_count
+                      // println("after", group)
+                      inserted = true
+                    }
                   }
                 }
               }
@@ -1795,7 +1816,9 @@ class TeAALDFGraphConstProp(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
         }
 
         if (!inserted) {
-          groupedContiguousKeys += HashSet(or_count)
+          val group = HashSet(or_count)
+          groupedContiguousKeys += group
+          if (essent.passes.NanhuSimulation.enabled) groupByCount(or_count) = group
         }
       }
 

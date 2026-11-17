@@ -243,16 +243,7 @@ class TeAALTranspiler(opIndex: HashMap[String, Int]) {
     val tensorYML = new File(outputDir, s"${tName}.txt")
     val tensor = new FileWriter(tensorYML)
 
-    var yml = ""
-    
-    for (i <- 0 to circuitInput.size-1) {
-        yml += (circuitInput(i)).toString
-        yml += ","
-    }
-
-    yml = yml.dropRight(1)
-
-    tensor.write(yml)
+    tensor.write(circuitInput.iterator.map(_.toString).mkString(","))
 
     tensor.close()
   }
@@ -284,12 +275,11 @@ class TeAALTranspiler(opIndex: HashMap[String, Int]) {
     yml = yml.substring(0, idx)
     yml += "]\n"
     yml += "            payloads:\n"
+    tensor.write(yml)
 
     for (i <- 0 to nodeIDOrderMap.size-1) {
-        yml += unrollInnerDimIn(nodeIDOrderMap, i, dim2, r3)
+        tensor.write(unrollInnerDimIn(nodeIDOrderMap, i, dim2, r3))
     }
-
-    tensor.write(yml)
 
     tensor.close()
   }
@@ -322,13 +312,12 @@ class TeAALTranspiler(opIndex: HashMap[String, Int]) {
     yml = yml.substring(0, idx)
     yml += "]\n"
     yml += "            payloads:\n"
+    tensor.write(yml)
 
     for (i <- 0 to isnMap.size-1) {
-        yml += unrollInnerDimOp(isnMap, i, dim2)
+        tensor.write(unrollInnerDimOp(isnMap, i, dim2))
         // isnMap.remove(i)
     }
-
-    tensor.write(yml)
 
     tensor.close()
   }

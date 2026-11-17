@@ -169,6 +169,24 @@ class TeAALDFGraphExtractor(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
   }
 
   def layerExtract(outNeigh_cp: BufferHashMap, inNeigh_cp: BufferHashMap, iEBuffer: BufferHashMap, oEBuffer: BufferHashMap): Unit = {
+    // Only removals occur during layering. This snapshot enumerates exactly
+    // the consumers the upstream fallback would find by scanning the whole graph.
+    val missingConsumers = HashMap[String, HashSet[String]]()
+    if (essent.passes.NanhuSimulation.enabled) {
+      inNeigh_cp.foreach { case (consumer, neighbors) =>
+        neighbors.foreach { neighbor =>
+          if (!outNeigh_cp.contains(neighbor))
+            missingConsumers.getOrElseUpdate(neighbor, HashSet.empty) += consumer
+        }
+      }
+    }
+    def removeLayerNode(node: String): Unit = {
+      if (!essent.passes.NanhuSimulation.enabled || outNeigh_cp.contains(node))
+        nodeRemover(inNeigh_cp, node, outNeigh_cp)
+      else missingConsumers.get(node).foreach { consumers =>
+        consumers.foreach { consumer => inNeigh_cp.get(consumer).foreach(_.remove(node)) }
+      }
+    }
     layerMap += "layer0"->HashSet[String]()
     layerMap += "input"->HashSet[String]()
 
@@ -178,7 +196,7 @@ class TeAALDFGraphExtractor(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
         if (!inNeigh_cp.contains(op)) {
           layerMap("layer0") += op
           nodeToLayer += op->0
-          nodeRemover(inNeigh_cp, op, outNeigh_cp)
+          removeLayerNode(op)
         }
       }
     }
@@ -212,8 +230,10 @@ class TeAALDFGraphExtractor(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
       }
 
       rmNode.foreach { node =>
-        nodeRemover(inNeigh_cp, node, outNeigh_cp)
+        removeLayerNode(node)
       }
+      if (essent.passes.NanhuSimulation.enabled && layerCounter % 32 == 0)
+        println(s"[Nanhu] layer $layerCounter, ${inNeigh_cp.size} nodes remain")
       layerCounter = layerCounter + 1
       rmNode.clear()
     }
@@ -423,7 +443,14 @@ class TeAALDFGraphExtractor(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
     nodeOrderMap.remove(preLayerName)
   }
 
+  private lazy val nanhuDshiftByOp: HashMap[String, ArrayBuffer[String]] = {
+    val index = HashMap[String, ArrayBuffer[String]]()
+    dshiftGroup.foreach { group => group.foreach { op => index.getOrElseUpdate(op, group) } }
+    index
+  }
+
   def dshiftCheck(op: String): Boolean = {
+    if (essent.passes.NanhuSimulation.enabled) return nanhuDshiftByOp.contains(op)
     dshiftGroup foreach {group=>{
       if (group.contains(op)) {
         return true
@@ -433,7 +460,8 @@ class TeAALDFGraphExtractor(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
   }
 
   def dshiftExtract(op: String): ArrayBuffer[String] = {
-    dshiftGroup.find(_.contains(op)).getOrElse(ArrayBuffer.empty)
+    if (essent.passes.NanhuSimulation.enabled) nanhuDshiftByOp.getOrElse(op, ArrayBuffer.empty)
+    else dshiftGroup.find(_.contains(op)).getOrElse(ArrayBuffer.empty)
   }
 
   def findContiguousSet(set: HashSet[Int], length: Int): Option[Seq[Int]] = {
@@ -507,6 +535,7 @@ class TeAALDFGraphExtractor(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
     var current_layer = opTypeClass(layerMap(s"layer0"))
     var current_layer_order = ArrayBuffer[String]()
     var input_vars = ArrayBuffer[String]()
+    val input_vars_seen = HashSet[String]()
 
     current_layer foreach { case (opType, ops) => {
       ops foreach { op => {
@@ -520,8 +549,11 @@ class TeAALDFGraphExtractor(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
           else if (opInBufferOrder.contains(op)) {
             val sortedKeys = opInBufferOrder(op).toSeq.sortBy { case (_, hs) => hs.min }.map(_._1)
             sortedKeys foreach {input_var=>
-              if (!input_vars.contains(input_var)) {
+              val seen = if (essent.passes.NanhuSimulation.enabled)
+                input_vars_seen.contains(input_var) else input_vars.contains(input_var)
+              if (!seen) {
                 input_vars += input_var
+                if (essent.passes.NanhuSimulation.enabled) input_vars_seen += input_var
               }
             }
           }
@@ -534,6 +566,7 @@ class TeAALDFGraphExtractor(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
 
     val remain_in = layerMap("input").toSet -- input_vars.toSet
     val sorted_input = input_vars ++ remain_in.toSeq.sorted // sort by alphebet
+    val sorted_input_set = if (essent.passes.NanhuSimulation.enabled) sorted_input.toSet else Set.empty[String]
 
     sorted_input foreach {op=>{
       if (!SimDTM_input.contains(op)) {
@@ -605,7 +638,7 @@ class TeAALDFGraphExtractor(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
       nodeOrderMap("layer0") += op->HashSet[String]()
       if (iEBufferR.contains(op)) {
         nodeOrderMap("layer0")(op) ++= iEBufferR(op).clone()
-      } else if (sorted_input.contains(op)) {
+      } else if (if (essent.passes.NanhuSimulation.enabled) sorted_input_set.contains(op) else sorted_input.contains(op)) {
         nodeOrderMap("layer0")(op) += op
       }
 
@@ -632,7 +665,7 @@ class TeAALDFGraphExtractor(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
       }
     }}
 
-    val sortedfreeIdx = freeIdx.toSeq.sorted
+    val sortedfreeIdx = if (essent.passes.NanhuSimulation.enabled) freeIdx.toVector.sorted else freeIdx.toSeq.sorted
     var freeIdx_idx = 0
 
     reduce_arr foreach { op=> {
@@ -656,7 +689,10 @@ class TeAALDFGraphExtractor(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
       }
     }}
 
-    reduce_arr --= reduceop
+    if (essent.passes.NanhuSimulation.enabled) {
+      val remaining = reduceop.clone()
+      reduce_arr.filterInPlace(op => !remaining.remove(op))
+    } else reduce_arr --= reduceop
 
     reduce_arr foreach {op=> {
       if (dshiftCheck(op)) {
@@ -720,6 +756,8 @@ class TeAALDFGraphExtractor(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
     }
 
     for (i <- 1 to layerMap.size-2) {
+      if (essent.passes.NanhuSimulation.enabled && i % 32 == 0)
+        println(s"[Nanhu] Assign tensor indices, layer $i/${layerMap.size-2}")
       val layerNum = s"layer$i"
       val preLayerName = s"layer${i-1}"
       val preLayerNum = i-1
@@ -790,7 +828,7 @@ class TeAALDFGraphExtractor(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
         }
       }}
 
-      val sortedfreeIdx = freeIdx.toSeq.sorted
+      val sortedfreeIdx = if (essent.passes.NanhuSimulation.enabled) freeIdx.toVector.sorted else freeIdx.toSeq.sorted
       var freeIdx_idx = 0
 
       reduce_arr foreach { op=> {
@@ -814,7 +852,10 @@ class TeAALDFGraphExtractor(opInBufferOrder: opInOrder, inEdgeBuffer: BufferHash
         }
       }}
 
-      reduce_arr --= reduceop
+      if (essent.passes.NanhuSimulation.enabled) {
+        val remaining = reduceop.clone()
+        reduce_arr.filterInPlace(op => !remaining.remove(op))
+      } else reduce_arr --= reduceop
 
       reduce_arr foreach {op=> {
         if (dshiftCheck(op)) {
