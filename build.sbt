@@ -1,3 +1,7 @@
+lazy val root = project.in(file("."))
+lazy val fastAccesses212 = FastAccesses.build("fastAccesses212", "2.12.13", "1.5.1")
+lazy val fastAccesses213 = FastAccesses.build("fastAccesses213", "2.13.12", "1.5.6")
+
 organization := "io.github.ucsc-vama"
 
 version := "0.8-SNAPSHOT"
