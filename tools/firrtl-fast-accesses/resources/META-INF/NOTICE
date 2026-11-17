@@ -1,0 +1,4 @@
+RemoveAccesses is derived from FIRRTL 1.5.1 and 1.5.6, published as
+edu.berkeley.cs:firrtl_2.12:1.5.1 and edu.berkeley.cs:firrtl_2.13:1.5.6.
+The upstream source carries SPDX-License-Identifier: Apache-2.0.
+RTeAAL modifications add static-subtree expansion and opt-in expression caching.
