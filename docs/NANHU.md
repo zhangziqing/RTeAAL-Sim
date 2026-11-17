@@ -17,6 +17,10 @@ simulation environment:
   256 MiB; the host runner must reject out-of-range accesses and SD requests.
 - Compiler extraction and lowering retain observable signals, support wide
   values, and provide compiler checkpoints and scalable graph indexing.
+  Chain membership, missing reverse edges during layering, shift groups and
+  tensor input membership use indices in Nanhu mode. Text/YAML export writes
+  layers incrementally. These changes are part of the regular compiler source;
+  the historical `chain-index.jar` overlay is no longer needed.
 - Graph optimizations include associative and binary-concat balancing,
   ordered priority mux balancing, constant mux reduction, decoder/Mux1H
   folding and optional dense mux-index normalization.
@@ -35,30 +39,64 @@ variadic-concat implementation was reverted in this branch's history.
 
 ## Build and checks
 
-The build pins sbt 1.9.6, Scala 2.13.12 and FIRRTL 1.5.6. Publication checks
-used Java 21 and the existing cached dependencies. From this repository:
+The build pins sbt 1.9.6, Scala 2.13.12 and FIRRTL 1.5.6. Use **JDK 11**
+to build all targets, including the separate Scala 2.12.13 / FIRRTL 1.5.1
+override required by the pinned Nanhu elaborator. The Scala 2.13 simulator
+also builds on the verified JDK 21 toolchain. From this repository:
 
 ```bash
-sbt test
-sbt "Test / runMain CheckMuxBitwise"
-sbt -Drteaal.nanhu=true "Test / runMain CheckSharedMuxRoot"
-sbt assembly
+sbt test assembly "fastAccesses212 / checkFastAccesses" "fastAccesses213 / checkFastAccesses"
+python3 tools/check_graph_index.py
+sbt -Drteaal.nanhu=true -Drteaal.preserved=utils/bin/preserved_signals.txt \
+    "Test / runMain CheckMuxBitwise" "Test / runMain CheckSharedMuxRoot"
 ```
 
-The assembly target is `utils/bin/essent.jar`. Generated FIRRTL, tensors,
-compiled binaries and dependency caches are not part of the source release.
-The independent smoke programs above are preserved from the workspace's
-existing checks. They cover bitwise mux semantics at widths 1, 8 and 65, and
-shared lookup consumers and dependencies.
+The assembly target is `utils/bin/essent.jar`. The fast-accesses build targets
+produce `utils/bin/firrtl-fast-accesses-{2.12,2.13}.jar` from the maintained
+[source](../tools/firrtl-fast-accesses/README.md), using pinned Maven
+dependencies. They do not require an old assembly or a Nanhu Mill output.
+Put the matching override first on the JVM classpath for High FIRRTL lowering
+or Nanhu elaboration. Preclock and optimized-graph replay bypass
+`RemoveAccesses`; the runtime and CUDA kernel build do not use these JARs.
+Generated FIRRTL, tensors, compiled binaries and caches are excluded from Git.
+
+The graph check runs the scan and indexed implementations in separate JVMs
+and compares 120 mixed-operation graphs, 80 layering controls, 9,600 shift
+lookups, and six tensor graphs including 18 byte-identical exports. It also
+accepts `--reference-classpath` for an independently compiled baseline.
+The source integration was checked against both the retained scan path and
+compiler revision `61346d343ea8410c91814e6c07845a27cc296a21`.
+The fast-accesses checks compare stock, optimized and cached lowering of a
+nested dynamic read/write fixture and verify the loaded class origins.
+
+Use `-Drteaal.postGraphDump=/absolute/path/graph.bin` in Nanhu mode to save
+the graph after all enabled optimizations and before tensor allocation.
+From `utils/bin`, replay with the same source revision and observation list:
+
+```bash
+java -Drteaal.nanhu=true -Drteaal.preserved=/absolute/path/preserved.txt \
+     -cp essent.jar essent.NanhuGraphCheckpoint /absolute/path/graph.bin
+```
+
+`rteaal.design`, when supplied, must match the checkpoint's design name.
+The checkpoint carries graph, state, lookup, memory-dependency and export
+metadata. It is a compiler-specific build artifact. Four workspace controls
+(Bool SRAM, RAMHelper, FlashHelper and idle JTAG) compared fresh compilation
+and checkpoint replay against their Verilator traces through cycle 999;
+comparison starts after each control's documented initial-state boundary.
+No checkpoint or previous experiment artifact is required for the source build.
 
 Slice projection requires `--project-slices`; ordered masked-update composition
 requires `--compose-masked-updates`. Both are off by default. Their contracts,
 fixture corrections and verification are documented in
-[SLICE_PROJECTION.md](SLICE_PROJECTION.md). The latest cached-dependency run
-passed all 101 ScalaTest tests, all 54 bitwise semantic comparisons and the
-shared-root smoke. The real Nanhu PLRU fixture was available; no tests were
-canceled. Dependency resolution, `sbt test` and assembly were not rerun for
-this integration.
+[SLICE_PROJECTION.md](SLICE_PROJECTION.md). The earlier integration's cached
+ScalaTest results are preserved there; the graph/checkpoint/source-build
+follow-up passed all 102 ScalaTest tests with no cancellations on JDK 11,
+built the simulator assembly and both override JARs, and passed the graph and
+FIRRTL differential checks. The independent mux smoke programs cover
+54 bitwise comparisons at widths 1, 8 and 65, plus shared lookup consumers
+and dependencies. Full Nanhu execution and performance were not rerun for
+this integration; there is no newly measured end-to-end compilation speedup.
 
 ## Verification boundary
 
