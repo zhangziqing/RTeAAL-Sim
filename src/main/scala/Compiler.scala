@@ -507,6 +507,15 @@ class EssentEmitter(initialOpt: OptFlags, w: Writer, outputDir: String, topName:
       tconstp.uniqueOps = te.opInBufferOrder.size
     }
 
+    sys.props.get("rteaal.postGraphDump").foreach { path =>
+      require(essent.passes.NanhuSimulation.enabled, "Graph checkpoints require Nanhu mode")
+      NanhuGraphCheckpoint.save(path, NanhuGraphState(designName, te.opInBufferOrder,
+        te.inEdgeBuffer, te.outEdgeBuffer, te.oEBufferR, te.bitWidthMetadata,
+        te.regOrder, te.regNextOrder, tconstp.muxJumpTable, te.dshiftGroup,
+        mem_extra_inputs, tconstp.randomChain_Inputs, te.ORank,
+        tconstp.op_counter, tconstp.uniqueOps))
+    }
+
     val dfGraph = new TeAALDFGraphExtractor(te.opInBufferOrder, te.inEdgeBuffer, te.outEdgeBuffer, te.oEBufferR, 
                   te.bitWidthMetadata, te.regOrder, te.regNextOrder, tconstp.muxJumpTable, te.dshiftGroup, mem_extra_inputs, tconstp.randomChain_Inputs)
     dfGraph.DFGraphGen()
